@@ -3,7 +3,8 @@
 Thumbs.db
 
 # Output folder for BMAD
-_bmad-output/
+_bmad-output/*
+!_bmad-output/planning-artifacts/
 
 # Android / Gradle build files
 *.iml
