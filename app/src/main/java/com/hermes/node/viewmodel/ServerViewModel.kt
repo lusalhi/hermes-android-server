@@ -2,6 +2,8 @@ package com.hermes.node.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.hermes.node.engine.BootstrapExtractor
+import com.hermes.node.engine.ExtractionResult
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -14,7 +16,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class ServerViewModel(
-    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
+    private val bootstrapExtractor: BootstrapExtractor? = null,
+    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ServerUiState())
@@ -22,11 +26,96 @@ class ServerViewModel(
 
     private var metricsJob: Job? = null
     private var transitionJob: Job? = null
+    private var bootstrapJob: Job? = null
     private val maxLogCapacity = 2000
 
     init {
         // Initial welcome log
         onAddLog("Hermes Node initialized. Ready to start.", LogLevel.INFO)
+        checkAndInitializeBootstrap()
+    }
+
+    fun checkAndInitializeBootstrap() {
+        val extractor = bootstrapExtractor
+        if (extractor != null) {
+            if (extractor.isBootstrapInstalled()) {
+                _uiState.update {
+                    it.copy(
+                        isBootstrapComplete = true,
+                        isBootstrapping = false,
+                        bootstrapProgress = 1.0f,
+                        bootstrapMessage = "ARM64 Linux userland ready"
+                    )
+                }
+                onAddLog("ARM64 Linux userland verified and ready.", LogLevel.INFO)
+            } else {
+                triggerBootstrap()
+            }
+        } else {
+            _uiState.update {
+                it.copy(
+                    isBootstrapComplete = true,
+                    isBootstrapping = false,
+                    bootstrapProgress = 1.0f,
+                    bootstrapMessage = "ARM64 Linux userland ready"
+                )
+            }
+        }
+    }
+
+    fun triggerBootstrap() {
+        val extractor = bootstrapExtractor ?: return
+        if (_uiState.value.status == ServerStatus.RUNNING || _uiState.value.status == ServerStatus.STARTING) {
+            onStopServer()
+        }
+        bootstrapJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isBootstrapping = true,
+                isBootstrapComplete = false,
+                bootstrapProgress = 0.05f,
+                bootstrapMessage = "Preparing ARM64 Linux userland...",
+                errorMessage = null
+            )
+        }
+        onAddLog("Starting ARM64 Linux userland bootstrap extraction...", LogLevel.INFO)
+
+        bootstrapJob = viewModelScope.launch(ioDispatcher) {
+            val result = extractor.extract { progress, message ->
+                _uiState.update {
+                    it.copy(
+                        bootstrapProgress = progress,
+                        bootstrapMessage = message
+                    )
+                }
+            }
+
+            when (result) {
+                is ExtractionResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            isBootstrapping = false,
+                            isBootstrapComplete = true,
+                            bootstrapProgress = 1.0f,
+                            bootstrapMessage = "ARM64 Linux userland ready"
+                        )
+                    }
+                    onAddLog("ARM64 Linux userland extracted and verified successfully.", LogLevel.INFO)
+                }
+                is ExtractionResult.Error -> {
+                    _uiState.update {
+                        it.copy(
+                            isBootstrapping = false,
+                            isBootstrapComplete = false,
+                            bootstrapProgress = 0f,
+                            bootstrapMessage = "Bootstrap extraction failed",
+                            errorMessage = result.message
+                        )
+                    }
+                    onAddLog("Bootstrap extraction error: ${result.message}", LogLevel.ERROR)
+                }
+            }
+        }
     }
 
     fun onToggleServer() {
@@ -37,7 +126,17 @@ class ServerViewModel(
     }
 
     fun onStartServer() {
-        if (_uiState.value.status == ServerStatus.STARTING || _uiState.value.status == ServerStatus.RUNNING) {
+        if (_uiState.value.status == ServerStatus.STARTING || _uiState.value.status == ServerStatus.RUNNING || _uiState.value.status == ServerStatus.STOPPING) {
+            return
+        }
+
+        if (_uiState.value.isBootstrapping) {
+            onAddLog("Cannot start server: Linux userland extraction in progress.", LogLevel.WARN)
+            return
+        }
+
+        if (!_uiState.value.isBootstrapComplete || (bootstrapExtractor != null && !bootstrapExtractor.isBootstrapInstalled())) {
+            onSetError("Cannot start server: Linux userland is not installed or corrupted. Please run bootstrap.")
             return
         }
 
@@ -203,5 +302,6 @@ class ServerViewModel(
         metricsJob?.cancel()
         metricsJob = null
         transitionJob?.cancel()
+        bootstrapJob?.cancel()
     }
 }

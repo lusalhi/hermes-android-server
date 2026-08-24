@@ -251,4 +251,193 @@ class ServerViewModelTest {
         assertNull(errorState.tunnelUrl)
         assertEquals("Fatal error encountered", errorState.errorMessage)
     }
+
+    @Test
+    fun init_withoutExtractor_setsBootstrapCompleteTrue() {
+        val state = viewModel.uiState.value
+        assertTrue(state.isBootstrapComplete)
+        assertFalse(state.isBootstrapping)
+    }
+
+    @Test
+    fun init_withInstalledExtractor_setsBootstrapCompleteTrue() {
+        val fakeExtractor = FakeBootstrapExtractor(installed = true)
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        val state = vm.uiState.value
+        assertTrue(state.isBootstrapComplete)
+        assertFalse(state.isBootstrapping)
+        assertEquals(0, fakeExtractor.extractCalls)
+        assertTrue(state.logs.any { it.message.contains("ARM64 Linux userland verified") })
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun init_withUninstalledExtractor_triggersExtractionAndCompletes() = runTest(testDispatcher) {
+        val fakeExtractor = FakeBootstrapExtractor(installed = false, shouldSucceed = true)
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertTrue(state.isBootstrapComplete)
+        assertFalse(state.isBootstrapping)
+        assertEquals(1, fakeExtractor.extractCalls)
+        assertEquals(1.0f, state.bootstrapProgress, 0.001f)
+        assertTrue(state.logs.any { it.message.contains("extracted and verified successfully") })
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun init_withFailingExtractor_setsErrorState() = runTest(testDispatcher) {
+        val fakeExtractor = FakeBootstrapExtractor(installed = false, shouldSucceed = false, errorMessage = "Corrupt tar.xz")
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isBootstrapComplete)
+        assertFalse(state.isBootstrapping)
+        assertEquals("Corrupt tar.xz", state.errorMessage)
+        assertTrue(state.logs.any { it.level == LogLevel.ERROR && it.message.contains("Corrupt tar.xz") })
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onStartServer_whenBootstrapIncomplete_setsError() = runTest(testDispatcher) {
+        val fakeExtractor = FakeBootstrapExtractor(installed = false, shouldSucceed = false)
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testScheduler.advanceUntilIdle()
+        assertFalse(vm.uiState.value.isBootstrapComplete)
+
+        vm.onStartServer()
+
+        val state = vm.uiState.value
+        assertEquals(ServerStatus.ERROR, state.status)
+        assertTrue(state.errorMessage?.contains("Linux userland is not installed") == true)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onStartServer_whenBootstrapping_doesNotStart() {
+        val fakeExtractor = FakeBootstrapExtractor(installed = false, shouldSucceed = false)
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertTrue(vm.uiState.value.isBootstrapping)
+        vm.onStartServer()
+
+        val state = vm.uiState.value
+        assertEquals(ServerStatus.STOPPED, state.status)
+        assertTrue(state.logs.any { it.message.contains("Linux userland extraction in progress") })
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun triggerBootstrap_retriesExtractionSuccessfully() = runTest(testDispatcher) {
+        val fakeExtractor = FakeBootstrapExtractor(installed = false, shouldSucceed = false)
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testScheduler.advanceUntilIdle()
+        assertFalse(vm.uiState.value.isBootstrapComplete)
+
+        // Fix extractor to succeed
+        fakeExtractor.shouldSucceed = true
+        vm.triggerBootstrap()
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertTrue(state.isBootstrapComplete)
+        assertFalse(state.isBootstrapping)
+        assertNull(state.errorMessage)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun triggerBootstrap_stopsServer_ifRunning() = runTest(testDispatcher) {
+        val fakeExtractor = FakeBootstrapExtractor(installed = true)
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+
+        vm.triggerBootstrap()
+        assertEquals(ServerStatus.STOPPING, vm.uiState.value.status)
+        assertTrue(vm.uiState.value.isBootstrapping)
+
+        advanceTimeBy(450)
+        testScheduler.advanceUntilIdle()
+        assertEquals(ServerStatus.STOPPED, vm.uiState.value.status)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onStartServer_whenStopping_doesNotStart() = runTest(testDispatcher) {
+        viewModel.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, viewModel.uiState.value.status)
+
+        viewModel.onStopServer()
+        assertEquals(ServerStatus.STOPPING, viewModel.uiState.value.status)
+
+        // Attempt start while stopping
+        viewModel.onStartServer()
+        assertEquals(ServerStatus.STOPPING, viewModel.uiState.value.status)
+        advanceTimeBy(450)
+        assertEquals(ServerStatus.STOPPED, viewModel.uiState.value.status)
+    }
+
+    private class FakeBootstrapExtractor(
+        var installed: Boolean = false,
+        var shouldSucceed: Boolean = true,
+        var errorMessage: String = "Failed extraction"
+    ) : com.hermes.node.engine.BootstrapExtractor(filesDir = java.io.File("."), assetManager = null) {
+        var extractCalls = 0
+
+        override fun isBootstrapInstalled(): Boolean = installed
+
+        override suspend fun extract(
+            assetName: String,
+            onProgress: ((progress: Float, message: String) -> Unit)?
+        ): com.hermes.node.engine.ExtractionResult {
+            extractCalls++
+            onProgress?.invoke(0.5f, "Extracting fake...")
+            return if (shouldSucceed) {
+                installed = true
+                onProgress?.invoke(1.0f, "Complete")
+                com.hermes.node.engine.ExtractionResult.Success(java.io.File("./usr"))
+            } else {
+                com.hermes.node.engine.ExtractionResult.Error(errorMessage)
+            }
+        }
+    }
 }

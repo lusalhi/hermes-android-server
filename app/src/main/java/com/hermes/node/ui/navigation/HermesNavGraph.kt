@@ -28,10 +28,25 @@ import com.hermes.node.ui.theme.DarkSurface
 import com.hermes.node.ui.theme.HermesCyan
 import com.hermes.node.viewmodel.ServerViewModel
 
+import android.content.Context
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import com.hermes.node.engine.BootstrapExtractor
+
 @Composable
 fun HermesApp(
     navController: NavHostController = rememberNavController(),
-    viewModel: ServerViewModel = viewModel()
+    context: Context = LocalContext.current,
+    viewModel: ServerViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val extractor = BootstrapExtractor(context.applicationContext)
+                return ServerViewModel(extractor) as T
+            }
+        }
+    )
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -83,7 +98,8 @@ fun HermesApp(
             composable(Screen.Dashboard.route) {
                 DashboardScreen(
                     state = uiState,
-                    onToggleServer = viewModel::onToggleServer
+                    onToggleServer = viewModel::onToggleServer,
+                    onRetryBootstrap = viewModel::triggerBootstrap
                 )
             }
             composable(Screen.Logs.route) {

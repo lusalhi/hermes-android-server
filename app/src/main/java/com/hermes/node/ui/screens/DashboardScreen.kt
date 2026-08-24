@@ -76,6 +76,7 @@ import java.util.Locale
 fun DashboardScreen(
     state: ServerUiState,
     onToggleServer: () -> Unit,
+    onRetryBootstrap: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -107,13 +108,114 @@ fun DashboardScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            StatusPill(status = state.status)
+            StatusPill(status = state.status, isBootstrapping = state.isBootstrapping)
+        }
+
+        // Bootstrap Progress Card
+        AnimatedVisibility(visible = state.isBootstrapping) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(12.dp),
+                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(HermesCyan))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = HermesCyan
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Extracting ARM64 Linux Userland",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                        Text(
+                            text = "${(state.bootstrapProgress * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = HermesCyan
+                        )
+                    }
+
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { state.bootstrapProgress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = HermesCyan,
+                        trackColor = DarkBorder
+                    )
+
+                    Text(
+                        text = state.bootstrapMessage.ifEmpty { "Decompressing userland..." },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // Bootstrap Required Card (when not complete and not actively running)
+        AnimatedVisibility(visible = !state.isBootstrapComplete && !state.isBootstrapping && onRetryBootstrap != null) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(12.dp),
+                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(StatusStarting))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "ARM64 Userland Setup Required",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = "Unpack Python 3.11 & PRoot runtime to enable agent daemon.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Button(
+                        onClick = { onRetryBootstrap?.invoke() },
+                        colors = ButtonDefaults.buttonColors(containerColor = HermesCyan)
+                    ) {
+                        Text("Install", color = DarkSurface, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
 
         // Server Status & Main Action Hero Card
         ServerControlCard(
             status = state.status,
             uptimeSeconds = state.uptimeSeconds,
+            isBootstrapping = state.isBootstrapping,
+            isBootstrapComplete = state.isBootstrapComplete,
             onToggleServer = onToggleServer
         )
 
@@ -329,13 +431,17 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun StatusPill(status: ServerStatus) {
-    val (bgColor, textColor, label) = when (status) {
-        ServerStatus.STOPPED -> Triple(StatusStopped.copy(alpha = 0.2f), StatusStopped, "STOPPED")
-        ServerStatus.STARTING -> Triple(StatusStarting.copy(alpha = 0.2f), StatusStarting, "STARTING")
-        ServerStatus.RUNNING -> Triple(StatusRunning.copy(alpha = 0.2f), StatusRunning, "ONLINE")
-        ServerStatus.STOPPING -> Triple(StatusStopping.copy(alpha = 0.2f), StatusStopping, "STOPPING")
-        ServerStatus.ERROR -> Triple(StatusError.copy(alpha = 0.2f), StatusError, "ERROR")
+private fun StatusPill(status: ServerStatus, isBootstrapping: Boolean = false) {
+    val (bgColor, textColor, label) = if (isBootstrapping) {
+        Triple(StatusStarting.copy(alpha = 0.2f), StatusStarting, "INSTALLING")
+    } else {
+        when (status) {
+            ServerStatus.STOPPED -> Triple(StatusStopped.copy(alpha = 0.2f), StatusStopped, "STOPPED")
+            ServerStatus.STARTING -> Triple(StatusStarting.copy(alpha = 0.2f), StatusStarting, "STARTING")
+            ServerStatus.RUNNING -> Triple(StatusRunning.copy(alpha = 0.2f), StatusRunning, "ONLINE")
+            ServerStatus.STOPPING -> Triple(StatusStopping.copy(alpha = 0.2f), StatusStopping, "STOPPING")
+            ServerStatus.ERROR -> Triple(StatusError.copy(alpha = 0.2f), StatusError, "ERROR")
+        }
     }
 
     Surface(
@@ -368,16 +474,20 @@ private fun StatusPill(status: ServerStatus) {
 private fun ServerControlCard(
     status: ServerStatus,
     uptimeSeconds: Long,
+    isBootstrapping: Boolean = false,
+    isBootstrapComplete: Boolean = true,
     onToggleServer: () -> Unit
 ) {
     val isRunning = status == ServerStatus.RUNNING
-    val isBusy = status == ServerStatus.STARTING || status == ServerStatus.STOPPING
+    val isBusy = status == ServerStatus.STARTING || status == ServerStatus.STOPPING || isBootstrapping
 
     val buttonColor by animateColorAsState(
-        targetValue = when (status) {
-            ServerStatus.RUNNING -> StatusError
-            ServerStatus.STOPPED, ServerStatus.ERROR -> HermesCyan
-            ServerStatus.STARTING, ServerStatus.STOPPING -> StatusStarting
+        targetValue = when {
+            isBootstrapping -> StatusStarting
+            status == ServerStatus.RUNNING -> StatusError
+            status == ServerStatus.STOPPED || status == ServerStatus.ERROR -> HermesCyan
+            status == ServerStatus.STARTING || status == ServerStatus.STOPPING -> StatusStarting
+            else -> HermesCyan
         },
         label = "buttonColor"
     )
@@ -397,11 +507,12 @@ private fun ServerControlCard(
             Icon(
                 imageVector = Icons.Default.PowerSettingsNew,
                 contentDescription = null,
-                tint = when (status) {
-                    ServerStatus.RUNNING -> StatusRunning
-                    ServerStatus.STARTING, ServerStatus.STOPPING -> StatusStarting
-                    ServerStatus.ERROR -> StatusError
-                    ServerStatus.STOPPED -> StatusStopped
+                tint = when {
+                    isBootstrapping -> StatusStarting
+                    status == ServerStatus.RUNNING -> StatusRunning
+                    status == ServerStatus.STARTING || status == ServerStatus.STOPPING -> StatusStarting
+                    status == ServerStatus.ERROR -> StatusError
+                    else -> StatusStopped
                 },
                 modifier = Modifier.size(48.dp)
             )
@@ -409,12 +520,13 @@ private fun ServerControlCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = when (status) {
-                    ServerStatus.RUNNING -> "Hermes Daemon Active"
-                    ServerStatus.STARTING -> "Starting Daemon..."
-                    ServerStatus.STOPPING -> "Stopping Daemon..."
-                    ServerStatus.ERROR -> "Daemon Error"
-                    ServerStatus.STOPPED -> "Daemon Inactive"
+                text = when {
+                    isBootstrapping -> "Installing ARM64 Userland..."
+                    status == ServerStatus.RUNNING -> "Hermes Daemon Active"
+                    status == ServerStatus.STARTING -> "Starting Daemon..."
+                    status == ServerStatus.STOPPING -> "Stopping Daemon..."
+                    status == ServerStatus.ERROR -> "Daemon Error"
+                    else -> "Daemon Inactive"
                 },
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
@@ -422,7 +534,11 @@ private fun ServerControlCard(
             )
 
             Text(
-                text = if (isRunning) "Listening on port 8000" else "Tap start to launch the agent runtime",
+                text = when {
+                    isBootstrapping -> "Unpacking Python runtime & PRoot environment"
+                    isRunning -> "Listening on port 8000"
+                    else -> "Tap start to launch the agent runtime"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -431,7 +547,7 @@ private fun ServerControlCard(
 
             Button(
                 onClick = onToggleServer,
-                enabled = !isBusy,
+                enabled = !isBusy && isBootstrapComplete,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
@@ -441,7 +557,19 @@ private fun ServerControlCard(
                     contentColor = if (status == ServerStatus.RUNNING) Color.White else DarkSurface
                 )
             ) {
-                if (isBusy) {
+                if (isBootstrapping) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = DarkSurface
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "EXTRACTING RUNTIME...",
+                        fontWeight = FontWeight.Bold,
+                        color = DarkSurface
+                    )
+                } else if (isBusy) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
                         strokeWidth = 2.dp,

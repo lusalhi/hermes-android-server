@@ -35,5 +35,9 @@ data class ServerUiState(
     val customBaseUrl: String = "",
     val isPublicTunnelEnabled: Boolean = false,
     val tunnelUrl: String? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val isBootstrapping: Boolean = false,
+    val isBootstrapComplete: Boolean = false,
+    val bootstrapProgress: Float = 0f,
+    val bootstrapMessage: String = ""
 )
