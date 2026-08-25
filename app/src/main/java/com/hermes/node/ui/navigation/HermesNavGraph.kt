@@ -35,6 +35,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.hermes.node.data.ConfigSerializer
 import com.hermes.node.data.EncryptedConfigRepository
 import com.hermes.node.engine.BootstrapExtractor
+import com.hermes.node.service.HermesServerService
 
 @Composable
 fun HermesApp(
@@ -49,9 +50,11 @@ fun HermesApp(
                 val configRepository = EncryptedConfigRepository.create(appCtx)
                 val configSerializer = ConfigSerializer(appCtx.filesDir)
                 return ServerViewModel(
+                    context = appCtx,
                     bootstrapExtractor = extractor,
                     configRepository = configRepository,
-                    configSerializer = configSerializer
+                    configSerializer = configSerializer,
+                    serviceRunningFlow = HermesServerService.isRunning
                 ) as T
             }
         }

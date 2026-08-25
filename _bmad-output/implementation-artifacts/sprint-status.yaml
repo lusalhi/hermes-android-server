@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-24-2026 16:14
-last_updated: 08-25-2026 06:13
+last_updated: 08-25-2026 07:11
 project: hermes-android-server
 project_key: NOKEY
 tracking_system: file-system
@@ -45,10 +45,10 @@ development_status:
   2-1-automated-arm64-linux-rootfs-bootstrap-permission-setup: review
   2-2-binary-health-check-one-tap-environment-repair: review
   2-3-keystore-backed-encrypted-secrets-repository-posix-0600-conf: review
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
-  epic-3: backlog
-  3-1-android-foreground-service-with-partial-wakelock: backlog
+  epic-3: in-progress
+  3-1-android-foreground-service-with-partial-wakelock: review
   3-2-native-child-process-controller-with-graceful-signal-handlin: backlog
   3-3-battery-optimization-exemption-boot-completed-auto-start: backlog
   epic-3-retrospective: optional
@@ -68,3 +68,27 @@ development_status:
   6-1-skill-manifest-viewer-tool-enablement-toggles: backlog
   6-2-episodic-memory-inspector-database-backup-factory-reset: backlog
   epic-6-retrospective: optional
+action_items:
+  - id: "epic-2-retro-item-1-in-epic-3-decouple-sub-process-lifecycle"
+    epic: 2
+    action: "In Epic 3, decouple sub-process lifecycle and WakeLock management into
+      dedicated HermesServerService and ProcessController classes rather than adding
+      process execution logic directly to ServerViewModel."
+    owner: "Developer (Amelia)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-08-25.md"
+  - id: "epic-2-retro-item-2-extract-individual-cards-runtimeintegrit"
+    epic: 2
+    action: "Extract individual cards (RuntimeIntegrityCard, ServerControlCard, StatusPill)
+      from DashboardScreen.kt into dedicated component files in com.hermes.node.ui.components
+      during upcoming UI work."
+    owner: "Developer (Amelia)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-08-25.md"
+  - id: "epic-2-retro-item-3-ensure-the-production-arm64-python-proot"
+    epic: 2
+    action: "Ensure the production ARM64 Python/PRoot archive payload size and extraction
+      timeout are benchmarked against physical device storage in Epic 3."
+    owner: "Developer (Amelia)"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-08-25.md"

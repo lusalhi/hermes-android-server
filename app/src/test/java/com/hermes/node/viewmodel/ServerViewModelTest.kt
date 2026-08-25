@@ -810,6 +810,153 @@ class ServerViewModelTest {
         vm.stopMonitoring()
     }
 
+    @Test
+    fun onStartServer_triggersStartServiceAction_whenContextProvided() = runTest(testDispatcher) {
+        var startServiceCalled = false
+        var stopServiceCalled = false
+        val dummyContext = android.content.ContextWrapper(null)
+
+        val vm = ServerViewModel(
+            context = dummyContext,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            startServiceAction = { startServiceCalled = true },
+            stopServiceAction = { stopServiceCalled = true }
+        )
+
+        vm.onStartServer()
+        assertTrue(startServiceCalled)
+        assertFalse(stopServiceCalled)
+
+        advanceTimeBy(650)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onStopServer_triggersStopServiceAction_whenContextProvided() = runTest(testDispatcher) {
+        var startServiceCalled = false
+        var stopServiceCalled = false
+        val dummyContext = android.content.ContextWrapper(null)
+
+        val vm = ServerViewModel(
+            context = dummyContext,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            startServiceAction = { startServiceCalled = true },
+            stopServiceAction = { stopServiceCalled = true }
+        )
+
+        vm.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+
+        vm.onStopServer()
+        assertTrue(stopServiceCalled)
+
+        advanceTimeBy(450)
+        assertEquals(ServerStatus.STOPPED, vm.uiState.value.status)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun serviceObserver_whenServiceStoppedExternally_transitionsViewModelToStopped() = runTest(testDispatcher) {
+        val runningFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
+        val vm = ServerViewModel(
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            serviceRunningFlow = runningFlow
+        )
+
+        vm.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+
+        // Notification "Stop" action or external service shutdown occurs
+        runningFlow.value = false
+        advanceTimeBy(100)
+
+        val state = vm.uiState.value
+        assertEquals(ServerStatus.STOPPED, state.status)
+        assertEquals(0L, state.uptimeSeconds)
+        assertTrue(state.logs.any { it.message.contains("Hermes Node daemon stopped") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun serviceObserver_whenServiceStartedExternally_transitionsViewModelToRunning() = runTest(testDispatcher) {
+        val runningFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+        val vm = ServerViewModel(
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            serviceRunningFlow = runningFlow
+        )
+
+        assertEquals(ServerStatus.STOPPED, vm.uiState.value.status)
+
+        // External service startup occurs
+        runningFlow.value = true
+        advanceTimeBy(100)
+
+        val state = vm.uiState.value
+        assertEquals(ServerStatus.RUNNING, state.status)
+        assertTrue(state.logs.any { it.message.contains("Hermes Node daemon running on port 8000") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onSetError_triggersStopServiceAction_whenContextProvided() = runTest(testDispatcher) {
+        var stopServiceCalled = false
+        val dummyContext = android.content.ContextWrapper(null)
+
+        val vm = ServerViewModel(
+            context = dummyContext,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            startServiceAction = {},
+            stopServiceAction = { stopServiceCalled = true }
+        )
+
+        vm.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+
+        vm.onSetError("Fatal daemon crash")
+        assertTrue(stopServiceCalled)
+        assertEquals(ServerStatus.ERROR, vm.uiState.value.status)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onRepairRuntime_triggersStopServiceAction_whenRunning() = runTest(testDispatcher) {
+        var stopServiceCalled = false
+        val dummyContext = android.content.ContextWrapper(null)
+        val fakeExtractor = FakeBootstrapExtractor(installed = true)
+
+        val vm = ServerViewModel(
+            context = dummyContext,
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            startServiceAction = {},
+            stopServiceAction = { stopServiceCalled = true }
+        )
+
+        vm.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+
+        fakeExtractor.healthResult = com.hermes.node.engine.HealthCheckResult.Corrupted(listOf("Damaged"), "Damaged")
+        vm.onRepairRuntime()
+        assertTrue(stopServiceCalled)
+        assertEquals(ServerStatus.STOPPED, vm.uiState.value.status)
+
+        advanceTimeBy(100)
+        vm.stopMonitoring()
+    }
+
     private class FakeBootstrapExtractor(
         var healthResult: com.hermes.node.engine.HealthCheckResult = com.hermes.node.engine.HealthCheckResult.NotInstalled,
         var shouldSucceed: Boolean = true,

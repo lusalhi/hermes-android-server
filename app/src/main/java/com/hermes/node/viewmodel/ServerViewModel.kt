@@ -11,6 +11,8 @@ import com.hermes.node.data.model.SystemConfig
 import com.hermes.node.engine.BootstrapExtractor
 import com.hermes.node.engine.ExtractionResult
 import com.hermes.node.engine.HealthCheckResult
+import android.content.Context
+import com.hermes.node.service.HermesServerService
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,13 +25,18 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class ServerViewModel(
+    context: Context? = null,
     private val bootstrapExtractor: BootstrapExtractor? = null,
     private val configRepository: ConfigRepository? = null,
     private val configSerializer: ConfigSerializer? = null,
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val serviceRunningFlow: StateFlow<Boolean>? = null,
+    private val startServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.start(ctx) },
+    private val stopServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.stop(ctx) }
 ) : ViewModel() {
 
+    private val context: Context? = context?.applicationContext ?: context
     private val _uiState = MutableStateFlow(ServerUiState())
     val uiState: StateFlow<ServerUiState> = _uiState.asStateFlow()
 
@@ -37,6 +44,7 @@ class ServerViewModel(
     private var transitionJob: Job? = null
     private var bootstrapJob: Job? = null
     private var saveSettingsJob: Job? = null
+    private var serviceObserverJob: Job? = null
     private val maxLogCapacity = 2000
 
     init {
@@ -44,6 +52,7 @@ class ServerViewModel(
         // Initial welcome log
         onAddLog("Hermes Node initialized. Ready to start.", LogLevel.INFO)
         checkAndInitializeBootstrap()
+        observeServiceState()
     }
 
     fun performHealthCheck(): HealthCheckResult {
@@ -199,6 +208,11 @@ class ServerViewModel(
             metricsJob = null
             transitionJob?.cancel()
             transitionJob = null
+            context?.let { ctx ->
+                try {
+                    stopServiceAction?.invoke(ctx)
+                } catch (ignored: Exception) {}
+            }
             _uiState.update {
                 it.copy(
                     status = ServerStatus.STOPPED,
@@ -346,6 +360,14 @@ class ServerViewModel(
         }
         onAddLog("Starting Hermes Node daemon...", LogLevel.INFO)
 
+        context?.let { ctx ->
+            try {
+                startServiceAction?.invoke(ctx)
+            } catch (e: Exception) {
+                onAddLog("Failed to start foreground service: ${e.message}", LogLevel.WARN)
+            }
+        }
+
         transitionJob = viewModelScope.launch {
             delay(600) // Brief startup transition
 
@@ -377,6 +399,14 @@ class ServerViewModel(
 
         _uiState.update { it.copy(status = ServerStatus.STOPPING) }
         onAddLog("Stopping Hermes Node daemon...", LogLevel.INFO)
+
+        context?.let { ctx ->
+            try {
+                stopServiceAction?.invoke(ctx)
+            } catch (e: Exception) {
+                onAddLog("Failed to stop foreground service: ${e.message}", LogLevel.WARN)
+            }
+        }
 
         transitionJob = viewModelScope.launch {
             delay(400) // Brief graceful shutdown
@@ -566,6 +596,11 @@ class ServerViewModel(
         metricsJob?.cancel()
         metricsJob = null
         transitionJob?.cancel()
+        context?.let { ctx ->
+            try {
+                stopServiceAction?.invoke(ctx)
+            } catch (ignored: Exception) {}
+        }
         _uiState.update {
             it.copy(
                 status = ServerStatus.ERROR,
@@ -585,6 +620,44 @@ class ServerViewModel(
                 status = if (it.status == ServerStatus.ERROR) ServerStatus.STOPPED else it.status,
                 errorMessage = null
             )
+        }
+    }
+
+    private fun observeServiceState() {
+        val flow = serviceRunningFlow ?: return
+        serviceObserverJob?.cancel()
+        serviceObserverJob = viewModelScope.launch {
+            flow.collect { isRunning ->
+                val currentStatus = _uiState.value.status
+                if (!isRunning && (currentStatus == ServerStatus.RUNNING || currentStatus == ServerStatus.STARTING)) {
+                    metricsJob?.cancel()
+                    metricsJob = null
+                    transitionJob?.cancel()
+                    _uiState.update {
+                        it.copy(
+                            status = ServerStatus.STOPPED,
+                            uptimeSeconds = 0L,
+                            cpuUsagePercent = 0f,
+                            memoryUsageMb = 0L,
+                            tunnelUrl = null
+                        )
+                    }
+                    onAddLog("Hermes Node daemon stopped.", LogLevel.INFO)
+                } else if (isRunning && currentStatus == ServerStatus.STOPPED) {
+                    transitionJob?.cancel()
+                    _uiState.update {
+                        it.copy(
+                            status = ServerStatus.RUNNING,
+                            uptimeSeconds = 0L,
+                            cpuUsagePercent = 2.4f,
+                            memoryUsageMb = 85L,
+                            tunnelUrl = if (it.isPublicTunnelEnabled) "https://hermes-node.trycloudflare.com" else null
+                        )
+                    }
+                    onAddLog("Hermes Node daemon running on port 8000", LogLevel.INFO)
+                    startMetricsMonitoring()
+                }
+            }
         }
     }
 
@@ -620,5 +693,6 @@ class ServerViewModel(
         transitionJob?.cancel()
         bootstrapJob?.cancel()
         saveSettingsJob?.cancel()
+        serviceObserverJob?.cancel()
     }
 }
