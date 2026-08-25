@@ -1,5 +1,14 @@
 package com.hermes.node.viewmodel
 
+import com.hermes.node.data.ConfigRepository
+import com.hermes.node.data.ConfigSerializer
+import com.hermes.node.data.EncryptedConfigRepository
+import com.hermes.node.data.FakeSharedPreferences
+import com.hermes.node.data.model.GatewayConfig
+import com.hermes.node.data.model.HermesConfig
+import com.hermes.node.data.model.ProviderConfig
+import com.hermes.node.data.model.SystemConfig
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -618,6 +627,186 @@ class ServerViewModelTest {
         assertFalse(state.isBootstrapComplete)
         assertEquals("Missing critical binary: bin/hermes", state.integrityWarning)
         assertTrue(state.errorMessage?.contains("Runtime is corrupted") == true)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun init_withPersistedConfig_populatesUiStateOnStartup() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        repository.saveConfig(
+            HermesConfig(
+                provider = ProviderConfig(
+                    provider = "openrouter",
+                    apiKey = "sk-or-v1-saved-key-12345",
+                    model = "nousresearch/hermes-3-llama-3.1-405b",
+                    baseUrl = "https://openrouter.ai/api/v1"
+                ),
+                gateway = GatewayConfig(
+                    telegramToken = "987654:SAVED-TELEGRAM-TOKEN",
+                    isTelegramEnabled = true
+                ),
+                system = SystemConfig(
+                    autoStartOnBoot = true,
+                    publicTunnelEnabled = true
+                )
+            )
+        )
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        val state = vm.uiState.value
+        assertEquals("openrouter", state.selectedProvider)
+        assertEquals("sk-or-v1-saved-key-12345", state.apiKey)
+        assertEquals("987654:SAVED-TELEGRAM-TOKEN", state.telegramToken)
+        assertEquals("nousresearch/hermes-3-llama-3.1-405b", state.customModel)
+        assertEquals("https://openrouter.ai/api/v1", state.customBaseUrl)
+        assertTrue(state.isAutoStartEnabled)
+        assertTrue(state.isPublicTunnelEnabled)
+        assertTrue(state.logs.any { it.message.contains("Loaded persisted credentials") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onSaveSettings_persistsToRepository_andSerializesConfig() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_vm_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        // Provide inputs with surrounding whitespace to test trimming
+        vm.onUpdateProvider("anthropic")
+        vm.onUpdateApiKey("  sk-ant-api-test-key  ")
+        vm.onUpdateTelegramToken("  123456:BOT-TOKEN  ")
+        vm.onUpdateCustomModel("  claude-3-5-sonnet  ")
+        vm.onUpdateCustomBaseUrl("  https://api.anthropic.com  ")
+        vm.onUpdateAutoStart(true)
+        vm.onUpdatePublicTunnel(true)
+
+        vm.onSaveSettings()
+        // Verify isSavingSettings is set immediately
+        assertTrue(vm.uiState.value.isSavingSettings)
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isSavingSettings)
+        assertTrue(state.isSettingsSaved)
+        assertEquals("Settings saved successfully", state.configSaveMessage)
+        assertTrue(state.logs.any { it.message.contains("Settings saved successfully") })
+
+        // Verify inputs were trimmed in UI state
+        assertEquals("sk-ant-api-test-key", state.apiKey)
+        assertEquals("123456:BOT-TOKEN", state.telegramToken)
+        assertEquals("claude-3-5-sonnet", state.customModel)
+        assertEquals("https://api.anthropic.com", state.customBaseUrl)
+
+        // Verify repository was updated with trimmed values
+        val persistedConfig = repository.getConfig()
+        assertEquals("anthropic", persistedConfig.provider.provider)
+        assertEquals("sk-ant-api-test-key", persistedConfig.provider.apiKey)
+        assertEquals("123456:BOT-TOKEN", persistedConfig.gateway.telegramToken)
+        assertEquals("claude-3-5-sonnet", persistedConfig.provider.model)
+        assertEquals("https://api.anthropic.com", persistedConfig.provider.baseUrl)
+        assertTrue(persistedConfig.system.autoStartOnBoot)
+        assertTrue(persistedConfig.system.publicTunnelEnabled)
+
+        // Verify file was written with valid permissions
+        assertTrue(configFile.exists())
+        assertTrue(configFile.canRead())
+        assertTrue(configFile.canWrite())
+        assertFalse(configFile.canExecute())
+        assertTrue(configFile.readText(Charsets.UTF_8).contains("sk-ant-api-test-key"))
+
+        tempDir.deleteRecursively()
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onSaveSettings_whenSerializationFails_surfacesErrorFeedback() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val invalidFile = File(System.getProperty("java.io.tmpdir") ?: "/tmp")
+        val brokenSerializer = object : ConfigSerializer(invalidFile) {
+            override fun serialize(config: HermesConfig): Result<File> {
+                return Result.failure(java.io.IOException("Disk I/O failure on hermes.json"))
+            }
+        }
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = brokenSerializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onSaveSettings()
+        assertTrue(vm.uiState.value.isSavingSettings)
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isSavingSettings)
+        assertFalse(state.isSettingsSaved)
+        assertTrue(state.configSaveMessage?.contains("Disk I/O failure") == true)
+        assertTrue(state.logs.any { it.level == LogLevel.ERROR && it.message.contains("Error saving runtime configuration") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onDismissSaveMessage_resetsSaveStatusAndMessage() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val vm = ServerViewModel(
+            configRepository = repository,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onSaveSettings()
+        testScheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.isSettingsSaved)
+
+        vm.onDismissSaveMessage()
+        assertFalse(vm.uiState.value.isSettingsSaved)
+        assertNull(vm.uiState.value.configSaveMessage)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onUpdateSettings_resetsSavedStateAndMessage() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val vm = ServerViewModel(
+            configRepository = repository,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onSaveSettings()
+        testScheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.isSettingsSaved)
+
+        vm.onUpdateApiKey("new-edited-key")
+        assertFalse(vm.uiState.value.isSettingsSaved)
+        assertNull(vm.uiState.value.configSaveMessage)
+
         vm.stopMonitoring()
     }
 

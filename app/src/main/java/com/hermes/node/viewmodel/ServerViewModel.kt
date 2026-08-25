@@ -2,6 +2,12 @@ package com.hermes.node.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.hermes.node.data.ConfigRepository
+import com.hermes.node.data.ConfigSerializer
+import com.hermes.node.data.model.GatewayConfig
+import com.hermes.node.data.model.HermesConfig
+import com.hermes.node.data.model.ProviderConfig
+import com.hermes.node.data.model.SystemConfig
 import com.hermes.node.engine.BootstrapExtractor
 import com.hermes.node.engine.ExtractionResult
 import com.hermes.node.engine.HealthCheckResult
@@ -18,6 +24,8 @@ import kotlinx.coroutines.launch
 
 class ServerViewModel(
     private val bootstrapExtractor: BootstrapExtractor? = null,
+    private val configRepository: ConfigRepository? = null,
+    private val configSerializer: ConfigSerializer? = null,
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ViewModel() {
@@ -28,9 +36,11 @@ class ServerViewModel(
     private var metricsJob: Job? = null
     private var transitionJob: Job? = null
     private var bootstrapJob: Job? = null
+    private var saveSettingsJob: Job? = null
     private val maxLogCapacity = 2000
 
     init {
+        loadPersistedConfig()
         // Initial welcome log
         onAddLog("Hermes Node initialized. Ready to start.", LogLevel.INFO)
         checkAndInitializeBootstrap()
@@ -396,34 +406,153 @@ class ServerViewModel(
         _uiState.update { it.copy(logs = emptyList()) }
     }
 
+    fun loadPersistedConfig() {
+        val repo = configRepository ?: return
+        try {
+            val config = repo.getConfig()
+            _uiState.update { current ->
+                current.copy(
+                    selectedProvider = config.provider.provider.ifEmpty { current.selectedProvider },
+                    apiKey = config.provider.apiKey,
+                    telegramToken = config.gateway.telegramToken,
+                    customModel = config.provider.model,
+                    customBaseUrl = config.provider.baseUrl,
+                    isAutoStartEnabled = config.system.autoStartOnBoot,
+                    isPublicTunnelEnabled = config.system.publicTunnelEnabled
+                )
+            }
+            if (config.provider.apiKey.isNotBlank() || config.gateway.telegramToken.isNotBlank()) {
+                onAddLog("Loaded persisted credentials securely from repository.", LogLevel.INFO)
+            }
+        } catch (e: Exception) {
+            onAddLog("Warning: Failed to load stored credentials: ${e.message}", LogLevel.WARN)
+        }
+    }
+
+    fun onSaveSettings() {
+        saveSettingsJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isSavingSettings = true,
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+        saveSettingsJob = viewModelScope.launch(ioDispatcher) {
+            val currentState = _uiState.value
+            val trimmedApiKey = currentState.apiKey.trim()
+            val trimmedTelegramToken = currentState.telegramToken.trim()
+            val trimmedCustomModel = currentState.customModel.trim()
+            val trimmedCustomBaseUrl = currentState.customBaseUrl.trim()
+
+            // Update UI state with trimmed inputs
+            _uiState.update {
+                it.copy(
+                    apiKey = trimmedApiKey,
+                    telegramToken = trimmedTelegramToken,
+                    customModel = trimmedCustomModel,
+                    customBaseUrl = trimmedCustomBaseUrl
+                )
+            }
+
+            val config = HermesConfig(
+                provider = ProviderConfig(
+                    provider = currentState.selectedProvider,
+                    apiKey = trimmedApiKey,
+                    model = trimmedCustomModel,
+                    baseUrl = trimmedCustomBaseUrl
+                ),
+                gateway = GatewayConfig(
+                    telegramToken = trimmedTelegramToken,
+                    isTelegramEnabled = trimmedTelegramToken.isNotBlank()
+                ),
+                system = SystemConfig(
+                    autoStartOnBoot = currentState.isAutoStartEnabled,
+                    publicTunnelEnabled = currentState.isPublicTunnelEnabled
+                )
+            )
+
+            try {
+                // 1. Save to ConfigRepository (Keystore-backed EncryptedSharedPreferences)
+                configRepository?.saveConfig(config)
+
+                // 2. Atomically serialize to hermes.json with POSIX 0600 permissions
+                val result = configSerializer?.serialize(config)
+                if (result != null && result.isFailure) {
+                    val error = result.exceptionOrNull()?.message ?: "Failed to write configuration"
+                    _uiState.update {
+                        it.copy(
+                            isSavingSettings = false,
+                            isSettingsSaved = false,
+                            configSaveMessage = "Failed to serialize config: $error"
+                        )
+                    }
+                    onAddLog("Error saving runtime configuration: $error", LogLevel.ERROR)
+                    return@launch
+                }
+
+                _uiState.update {
+                    it.copy(
+                        isSavingSettings = false,
+                        isSettingsSaved = true,
+                        configSaveMessage = "Settings saved successfully"
+                    )
+                }
+                onAddLog("Settings saved successfully and hermes.json serialized (0600).", LogLevel.INFO)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                val error = e.message ?: "Unknown error saving configuration"
+                _uiState.update {
+                    it.copy(
+                        isSavingSettings = false,
+                        isSettingsSaved = false,
+                        configSaveMessage = "Failed to save settings: $error"
+                    )
+                }
+                onAddLog("Failed to save settings: $error", LogLevel.ERROR)
+            }
+        }
+    }
+
+    fun onDismissSaveMessage() {
+        _uiState.update {
+            it.copy(
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+    }
+
     fun onUpdateProvider(provider: String) {
-        _uiState.update { it.copy(selectedProvider = provider) }
+        _uiState.update { it.copy(selectedProvider = provider, isSettingsSaved = false, configSaveMessage = null) }
     }
 
     fun onUpdateApiKey(apiKey: String) {
-        _uiState.update { it.copy(apiKey = apiKey) }
+        _uiState.update { it.copy(apiKey = apiKey, isSettingsSaved = false, configSaveMessage = null) }
     }
 
     fun onUpdateTelegramToken(token: String) {
-        _uiState.update { it.copy(telegramToken = token) }
+        _uiState.update { it.copy(telegramToken = token, isSettingsSaved = false, configSaveMessage = null) }
     }
 
     fun onUpdateCustomModel(model: String) {
-        _uiState.update { it.copy(customModel = model) }
+        _uiState.update { it.copy(customModel = model, isSettingsSaved = false, configSaveMessage = null) }
     }
 
     fun onUpdateCustomBaseUrl(url: String) {
-        _uiState.update { it.copy(customBaseUrl = url) }
+        _uiState.update { it.copy(customBaseUrl = url, isSettingsSaved = false, configSaveMessage = null) }
     }
 
     fun onUpdateAutoStart(enabled: Boolean) {
-        _uiState.update { it.copy(isAutoStartEnabled = enabled) }
+        _uiState.update { it.copy(isAutoStartEnabled = enabled, isSettingsSaved = false, configSaveMessage = null) }
     }
 
     fun onUpdatePublicTunnel(enabled: Boolean) {
         _uiState.update { current ->
             current.copy(
                 isPublicTunnelEnabled = enabled,
+                isSettingsSaved = false,
+                configSaveMessage = null,
                 tunnelUrl = if (enabled && current.status == ServerStatus.RUNNING) {
                     "https://hermes-node.trycloudflare.com"
                 } else {
@@ -490,5 +619,6 @@ class ServerViewModel(
         metricsJob = null
         transitionJob?.cancel()
         bootstrapJob?.cancel()
+        saveSettingsJob?.cancel()
     }
 }

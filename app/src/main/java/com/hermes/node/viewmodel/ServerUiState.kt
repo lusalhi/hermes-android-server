@@ -42,5 +42,8 @@ data class ServerUiState(
     val bootstrapMessage: String = "",
     val isRuntimeCorrupted: Boolean = false,
     val integrityWarning: String? = null,
-    val isRepairing: Boolean = false
+    val isRepairing: Boolean = false,
+    val isSavingSettings: Boolean = false,
+    val isSettingsSaved: Boolean = false,
+    val configSaveMessage: String? = null
 )

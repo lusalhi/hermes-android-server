@@ -32,6 +32,8 @@ import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.hermes.node.data.ConfigSerializer
+import com.hermes.node.data.EncryptedConfigRepository
 import com.hermes.node.engine.BootstrapExtractor
 
 @Composable
@@ -42,8 +44,15 @@ fun HermesApp(
         factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                val extractor = BootstrapExtractor(context.applicationContext)
-                return ServerViewModel(extractor) as T
+                val appCtx = context.applicationContext
+                val extractor = BootstrapExtractor(appCtx)
+                val configRepository = EncryptedConfigRepository.create(appCtx)
+                val configSerializer = ConfigSerializer(appCtx.filesDir)
+                return ServerViewModel(
+                    bootstrapExtractor = extractor,
+                    configRepository = configRepository,
+                    configSerializer = configSerializer
+                ) as T
             }
         }
     )
@@ -118,7 +127,9 @@ fun HermesApp(
                     onUpdateCustomModel = viewModel::onUpdateCustomModel,
                     onUpdateCustomBaseUrl = viewModel::onUpdateCustomBaseUrl,
                     onUpdateAutoStart = viewModel::onUpdateAutoStart,
-                    onUpdatePublicTunnel = viewModel::onUpdatePublicTunnel
+                    onUpdatePublicTunnel = viewModel::onUpdatePublicTunnel,
+                    onSaveSettings = viewModel::onSaveSettings,
+                    onDismissSaveMessage = viewModel::onDismissSaveMessage
                 )
             }
         }

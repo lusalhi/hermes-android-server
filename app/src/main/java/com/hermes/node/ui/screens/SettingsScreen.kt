@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Memory
@@ -26,10 +29,12 @@ import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -71,6 +76,8 @@ fun SettingsScreen(
     onUpdateCustomBaseUrl: (String) -> Unit,
     onUpdateAutoStart: (Boolean) -> Unit,
     onUpdatePublicTunnel: (Boolean) -> Unit,
+    onSaveSettings: () -> Unit,
+    onDismissSaveMessage: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -105,6 +112,48 @@ fun SettingsScreen(
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
         )
+
+        // Feedback Banner
+        AnimatedVisibility(visible = state.configSaveMessage != null) {
+            val isSuccess = state.isSettingsSaved
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSuccess) HermesCyanDark.copy(alpha = 0.25f) else MaterialTheme.colorScheme.errorContainer
+                ),
+                shape = RoundedCornerShape(12.dp),
+                border = CardDefaults.outlinedCardBorder().copy(
+                    brush = androidx.compose.ui.graphics.SolidColor(if (isSuccess) HermesCyan else MaterialTheme.colorScheme.error)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (isSuccess) Icons.Default.CheckCircle else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = if (isSuccess) HermesCyan else MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = state.configSaveMessage ?: "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isSuccess) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismissSaveMessage) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Dismiss message",
+                            tint = if (isSuccess) HermesCyan else MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
 
         // LLM Provider Card
         Card(
@@ -420,24 +469,38 @@ fun SettingsScreen(
 
         // Save Confirmation Button
         Button(
-            onClick = {
-                Toast.makeText(context, "Settings saved successfully", Toast.LENGTH_SHORT).show()
-            },
+            onClick = onSaveSettings,
+            enabled = !state.isSavingSettings,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = HermesCyan,
-                contentColor = DarkSurface
+                contentColor = DarkSurface,
+                disabledContainerColor = HermesCyanDark.copy(alpha = 0.5f),
+                disabledContentColor = DarkSurface.copy(alpha = 0.7f)
             )
         ) {
-            Icon(imageVector = Icons.Default.Check, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Save Settings",
-                fontWeight = FontWeight.Bold
-            )
+            if (state.isSavingSettings) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = DarkSurface,
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Saving...",
+                    fontWeight = FontWeight.Bold
+                )
+            } else {
+                Icon(imageVector = Icons.Default.Check, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Save Settings",
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
