@@ -22,6 +22,15 @@ sealed class ExtractionResult {
     data class Error(val message: String, val cause: Throwable? = null) : ExtractionResult()
 }
 
+sealed class HealthCheckResult {
+    data object Healthy : HealthCheckResult()
+    data object NotInstalled : HealthCheckResult()
+    data class Corrupted(
+        val issues: List<String>,
+        val details: String = issues.joinToString("; ")
+    ) : HealthCheckResult()
+}
+
 open class BootstrapExtractor(
     val filesDir: File,
     private val assetManager: AssetManager? = null,
@@ -57,46 +66,136 @@ open class BootstrapExtractor(
         get() = File(filesDir, MARKER_FILE_NAME)
 
     /**
-     * Checks if the ARM64 PRoot userland environment is properly installed,
-     * the marker file exists and contains the expected version, and all critical
-     * binaries are present and executable.
+     * Diagnostic verification of runtime userland environment.
+     * Verifies presence of marker file, version alignment, usr directory existence,
+     * and presence + executable POSIX permissions on all critical binaries.
      */
-    open fun isBootstrapInstalled(): Boolean {
-        if (!markerFile.exists()) {
-            return false
+    open fun checkHealth(): HealthCheckResult {
+        val markerExists = markerFile.exists()
+        val usrExists = usrDir.exists() && usrDir.isDirectory
+        val usrHasEntries = usrExists && !(usrDir.list().isNullOrEmpty())
+
+        // If neither marker nor non-empty usr directory exists, it is a fresh uninstalled state
+        if (!markerExists && !usrHasEntries) {
+            return HealthCheckResult.NotInstalled
         }
 
-        // Validate version marker content
-        try {
-            val markerContent = markerFile.readText()
-            val hasValidVersion = markerContent.lines().any { line ->
-                val trimmed = line.trim()
-                trimmed == "version=$BOOTSTRAP_VERSION" || trimmed == "VERSION=$BOOTSTRAP_VERSION"
+        val issues = mutableListOf<String>()
+
+        // 1. Validate Marker File
+        if (!markerExists) {
+            issues.add("Bootstrap marker file (.bootstrap_complete) is missing")
+        } else {
+            try {
+                val markerContent = markerFile.readText()
+                val hasValidVersion = markerContent.lines().any { line ->
+                    val trimmed = line.trim()
+                    trimmed == "version=$BOOTSTRAP_VERSION" || trimmed == "VERSION=$BOOTSTRAP_VERSION"
+                }
+                if (!hasValidVersion) {
+                    issues.add("Bootstrap version mismatch (expected version=$BOOTSTRAP_VERSION)")
+                }
+            } catch (e: Exception) {
+                issues.add("Failed to read bootstrap marker file: ${e.message}")
             }
-            if (!hasValidVersion) {
-                return false
-            }
-        } catch (_: Exception) {
-            return false
         }
 
-        if (!usrDir.exists() || !usrDir.isDirectory) {
-            return false
-        }
-
-        for (binRelPath in CRITICAL_BINARIES) {
-            val binFile = File(usrDir, binRelPath)
-            if (!binFile.exists() || !binFile.isFile) {
-                return false
-            }
-            if (!binFile.canExecute()) {
-                binFile.setExecutable(true, false)
-                if (!binFile.canExecute()) {
-                    return false
+        // 2. Validate usr directory
+        if (!usrExists) {
+            issues.add("Userland directory ($USR_DIR_NAME) is missing or not a directory")
+        } else {
+            // 3. Validate critical binaries
+            for (binRelPath in CRITICAL_BINARIES) {
+                val binFile = File(usrDir, binRelPath)
+                if (!binFile.exists()) {
+                    issues.add("Missing critical binary: $binRelPath")
+                } else if (!binFile.isFile) {
+                    issues.add("Critical binary is not a regular file: $binRelPath")
+                } else if (!binFile.canExecute()) {
+                    // Try to restore execute permission
+                    binFile.setExecutable(true, false)
+                    if (!binFile.canExecute()) {
+                        issues.add("Critical binary is not executable: $binRelPath")
+                    }
                 }
             }
         }
-        return true
+
+        return if (issues.isEmpty()) {
+            HealthCheckResult.Healthy
+        } else {
+            HealthCheckResult.Corrupted(issues = issues, details = issues.joinToString("; "))
+        }
+    }
+
+    /**
+     * Checks if the ARM64 PRoot userland environment is properly installed and healthy.
+     */
+    open fun isBootstrapInstalled(): Boolean {
+        return checkHealth() is HealthCheckResult.Healthy
+    }
+
+    /**
+     * Performs a clean re-installation of the ARM64 userland environment.
+     * Safely purges only the usr/ directory and marker file, strictly preserving
+     * all user databases, checkpoints, configs, and other files in filesDir.
+     */
+    open suspend fun repair(
+        assetName: String = BOOTSTRAP_ASSET_NAME,
+        onProgress: ((progress: Float, message: String) -> Unit)? = null
+    ): ExtractionResult = withContext(ioDispatcher) {
+        try {
+            // Pre-clean validation: Disk space check
+            val usableSpace = filesDir.usableSpace
+            if (usableSpace in 1L until MIN_REQUIRED_DISK_BYTES) {
+                return@withContext ExtractionResult.Error(
+                    "Insufficient disk space: ${usableSpace / (1024 * 1024)} MB available, required at least ${MIN_REQUIRED_DISK_BYTES / (1024 * 1024)} MB"
+                )
+            }
+
+            if (assetManager == null) {
+                return@withContext ExtractionResult.Error("AssetManager is null; cannot extract asset '$assetName'")
+            }
+
+            val inputStream = try {
+                assetManager.open(assetName)
+            } catch (e: Exception) {
+                return@withContext ExtractionResult.Error(
+                    "Bootstrap archive '$assetName' not found in assets",
+                    e
+                )
+            }
+
+            onProgress?.invoke(0.02f, "Cleaning corrupted runtime userland...")
+            if (!cleanUserland()) {
+                return@withContext ExtractionResult.Error("Failed to cleanly purge previous userland directory")
+            }
+            extractFromStream(inputStream, onProgress)
+        } catch (e: Exception) {
+            ExtractionResult.Error("Runtime repair failed: ${e.message}", e)
+        }
+    }
+
+    open suspend fun repairFromStream(
+        inputStream: InputStream,
+        onProgress: ((progress: Float, message: String) -> Unit)? = null
+    ): ExtractionResult = withContext(ioDispatcher) {
+        try {
+            val usableSpace = filesDir.usableSpace
+            if (usableSpace in 1L until MIN_REQUIRED_DISK_BYTES) {
+                return@withContext ExtractionResult.Error(
+                    "Insufficient disk space: ${usableSpace / (1024 * 1024)} MB available, required at least ${MIN_REQUIRED_DISK_BYTES / (1024 * 1024)} MB"
+                )
+            }
+
+            onProgress?.invoke(0.02f, "Cleaning corrupted runtime userland...")
+            if (!cleanUserland()) {
+                return@withContext ExtractionResult.Error("Failed to cleanly purge previous userland directory")
+            }
+            extractFromStream(inputStream, onProgress)
+        } catch (e: Exception) {
+            ExtractionResult.Error("Runtime repair failed: ${e.message}", e)
+        }
     }
 
     /**
@@ -135,6 +234,13 @@ open class BootstrapExtractor(
         inputStream: InputStream,
         onProgress: ((progress: Float, message: String) -> Unit)? = null
     ): ExtractionResult = withContext(ioDispatcher) {
+        // Disk space check
+        val usableSpace = filesDir.usableSpace
+        if (usableSpace in 1L until MIN_REQUIRED_DISK_BYTES) {
+            return@withContext ExtractionResult.Error(
+                "Insufficient disk space: ${usableSpace / (1024 * 1024)} MB available, required at least ${MIN_REQUIRED_DISK_BYTES / (1024 * 1024)} MB"
+            )
+        }
         try {
             // Invalidate marker during extraction
             if (markerFile.exists()) {
@@ -319,10 +425,23 @@ open class BootstrapExtractor(
         return (mode and 0b001_001_001) != 0
     }
 
-    fun cleanUserland(): Boolean {
-        if (markerFile.exists()) {
-            markerFile.delete()
+    open fun cleanUserland(): Boolean {
+        return try {
+            if (markerFile.exists()) {
+                markerFile.delete()
+            }
+            if (usrDir.exists()) {
+                usrDir.walkBottomUp().forEach { file ->
+                    try {
+                        file.setWritable(true, true)
+                    } catch (_: Exception) {}
+                }
+                usrDir.deleteRecursively()
+            } else {
+                true
+            }
+        } catch (_: Exception) {
+            false
         }
-        return usrDir.deleteRecursively()
     }
 }

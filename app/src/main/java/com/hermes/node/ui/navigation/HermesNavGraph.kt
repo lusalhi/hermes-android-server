@@ -99,7 +99,8 @@ fun HermesApp(
                 DashboardScreen(
                     state = uiState,
                     onToggleServer = viewModel::onToggleServer,
-                    onRetryBootstrap = viewModel::triggerBootstrap
+                    onRetryBootstrap = viewModel::triggerBootstrap,
+                    onRepairRuntime = viewModel::onRepairRuntime
                 )
             }
             composable(Screen.Logs.route) {

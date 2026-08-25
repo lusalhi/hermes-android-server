@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -77,6 +79,7 @@ fun DashboardScreen(
     state: ServerUiState,
     onToggleServer: () -> Unit,
     onRetryBootstrap: (() -> Unit)? = null,
+    onRepairRuntime: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -108,7 +111,23 @@ fun DashboardScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            StatusPill(status = state.status, isBootstrapping = state.isBootstrapping)
+            StatusPill(
+                status = state.status,
+                isBootstrapping = state.isBootstrapping,
+                isRepairing = state.isRepairing,
+                isRuntimeCorrupted = state.isRuntimeCorrupted
+            )
+        }
+
+        // Runtime Integrity Card (when corrupted or repairing)
+        AnimatedVisibility(visible = state.isRuntimeCorrupted || state.isRepairing) {
+            onRepairRuntime?.let { repairAction ->
+                RuntimeIntegrityCard(
+                    warning = state.integrityWarning,
+                    isRepairing = state.isRepairing,
+                    onRepairRuntime = repairAction
+                )
+            }
         }
 
         // Bootstrap Progress Card
@@ -138,7 +157,7 @@ fun DashboardScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Extracting ARM64 Linux Userland",
+                                text = if (state.isRepairing) "Repairing ARM64 Linux Userland" else "Extracting ARM64 Linux Userland",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onBackground
@@ -163,7 +182,7 @@ fun DashboardScreen(
                     )
 
                     Text(
-                        text = state.bootstrapMessage.ifEmpty { "Decompressing userland..." },
+                        text = state.bootstrapMessage.ifEmpty { if (state.isRepairing) "Repairing userland..." else "Decompressing userland..." },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -171,8 +190,8 @@ fun DashboardScreen(
             }
         }
 
-        // Bootstrap Required Card (when not complete and not actively running)
-        AnimatedVisibility(visible = !state.isBootstrapComplete && !state.isBootstrapping && onRetryBootstrap != null) {
+        // Bootstrap Required Card (when not complete, not actively running, and not corrupted)
+        AnimatedVisibility(visible = !state.isBootstrapComplete && !state.isBootstrapping && !state.isRuntimeCorrupted && onRetryBootstrap != null) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -215,6 +234,8 @@ fun DashboardScreen(
             status = state.status,
             uptimeSeconds = state.uptimeSeconds,
             isBootstrapping = state.isBootstrapping,
+            isRepairing = state.isRepairing,
+            isRuntimeCorrupted = state.isRuntimeCorrupted,
             isBootstrapComplete = state.isBootstrapComplete,
             onToggleServer = onToggleServer
         )
@@ -431,11 +452,102 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun StatusPill(status: ServerStatus, isBootstrapping: Boolean = false) {
-    val (bgColor, textColor, label) = if (isBootstrapping) {
-        Triple(StatusStarting.copy(alpha = 0.2f), StatusStarting, "INSTALLING")
-    } else {
-        when (status) {
+fun RuntimeIntegrityCard(
+    warning: String?,
+    isRepairing: Boolean,
+    onRepairRuntime: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = DarkSurface
+        ),
+        shape = RoundedCornerShape(12.dp),
+        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(StatusError))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = "Integrity Warning",
+                    tint = StatusError,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Runtime Integrity Warning",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = StatusError
+                    )
+                    Text(
+                        text = warning?.takeIf { it.isNotBlank() }
+                            ?: "Corrupted or missing userland binaries detected.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = onRepairRuntime,
+                    enabled = !isRepairing,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = StatusError,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    if (isRepairing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Repairing...", fontWeight = FontWeight.Bold)
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Build,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Repair Runtime", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusPill(
+    status: ServerStatus,
+    isBootstrapping: Boolean = false,
+    isRepairing: Boolean = false,
+    isRuntimeCorrupted: Boolean = false
+) {
+    val (bgColor, textColor, label) = when {
+        isRepairing -> Triple(StatusStarting.copy(alpha = 0.2f), StatusStarting, "REPAIRING")
+        isBootstrapping -> Triple(StatusStarting.copy(alpha = 0.2f), StatusStarting, "INSTALLING")
+        isRuntimeCorrupted -> Triple(StatusError.copy(alpha = 0.2f), StatusError, "CORRUPTED")
+        else -> when (status) {
             ServerStatus.STOPPED -> Triple(StatusStopped.copy(alpha = 0.2f), StatusStopped, "STOPPED")
             ServerStatus.STARTING -> Triple(StatusStarting.copy(alpha = 0.2f), StatusStarting, "STARTING")
             ServerStatus.RUNNING -> Triple(StatusRunning.copy(alpha = 0.2f), StatusRunning, "ONLINE")
@@ -475,15 +587,18 @@ private fun ServerControlCard(
     status: ServerStatus,
     uptimeSeconds: Long,
     isBootstrapping: Boolean = false,
+    isRepairing: Boolean = false,
+    isRuntimeCorrupted: Boolean = false,
     isBootstrapComplete: Boolean = true,
     onToggleServer: () -> Unit
 ) {
     val isRunning = status == ServerStatus.RUNNING
-    val isBusy = status == ServerStatus.STARTING || status == ServerStatus.STOPPING || isBootstrapping
+    val isBusy = status == ServerStatus.STARTING || status == ServerStatus.STOPPING || isBootstrapping || isRepairing
 
     val buttonColor by animateColorAsState(
         targetValue = when {
-            isBootstrapping -> StatusStarting
+            isRepairing || isBootstrapping -> StatusStarting
+            isRuntimeCorrupted -> StatusError
             status == ServerStatus.RUNNING -> StatusError
             status == ServerStatus.STOPPED || status == ServerStatus.ERROR -> HermesCyan
             status == ServerStatus.STARTING || status == ServerStatus.STOPPING -> StatusStarting
@@ -508,7 +623,8 @@ private fun ServerControlCard(
                 imageVector = Icons.Default.PowerSettingsNew,
                 contentDescription = null,
                 tint = when {
-                    isBootstrapping -> StatusStarting
+                    isRepairing || isBootstrapping -> StatusStarting
+                    isRuntimeCorrupted -> StatusError
                     status == ServerStatus.RUNNING -> StatusRunning
                     status == ServerStatus.STARTING || status == ServerStatus.STOPPING -> StatusStarting
                     status == ServerStatus.ERROR -> StatusError
@@ -521,7 +637,9 @@ private fun ServerControlCard(
 
             Text(
                 text = when {
+                    isRepairing -> "Repairing ARM64 Userland..."
                     isBootstrapping -> "Installing ARM64 Userland..."
+                    isRuntimeCorrupted -> "Runtime Integrity Corrupted"
                     status == ServerStatus.RUNNING -> "Hermes Daemon Active"
                     status == ServerStatus.STARTING -> "Starting Daemon..."
                     status == ServerStatus.STOPPING -> "Stopping Daemon..."
@@ -535,7 +653,9 @@ private fun ServerControlCard(
 
             Text(
                 text = when {
+                    isRepairing -> "Restoring clean Python runtime & PRoot environment"
                     isBootstrapping -> "Unpacking Python runtime & PRoot environment"
+                    isRuntimeCorrupted -> "Core binaries damaged. Tap Repair Runtime above."
                     isRunning -> "Listening on port 8000"
                     else -> "Tap start to launch the agent runtime"
                 },
@@ -547,17 +667,29 @@ private fun ServerControlCard(
 
             Button(
                 onClick = onToggleServer,
-                enabled = !isBusy && isBootstrapComplete,
+                enabled = !isBusy && isBootstrapComplete && !isRuntimeCorrupted,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = buttonColor,
-                    contentColor = if (status == ServerStatus.RUNNING) Color.White else DarkSurface
+                    contentColor = if (status == ServerStatus.RUNNING || isRuntimeCorrupted) Color.White else DarkSurface
                 )
             ) {
-                if (isBootstrapping) {
+                if (isRepairing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = DarkSurface
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "REPAIRING RUNTIME...",
+                        fontWeight = FontWeight.Bold,
+                        color = DarkSurface
+                    )
+                } else if (isBootstrapping) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
                         strokeWidth = 2.dp,

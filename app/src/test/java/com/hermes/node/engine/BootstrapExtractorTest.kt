@@ -337,18 +337,195 @@ class BootstrapExtractorTest {
     }
 
     @Test
-    fun cleanUserland_deletesUsrDirAndMarker() {
+    fun checkHealth_returnsNotInstalled_whenDirEmptyAndMarkerMissing() {
+        val health = extractor.checkHealth()
+        assertTrue(health is HealthCheckResult.NotInstalled)
+    }
+
+    @Test
+    fun checkHealth_returnsHealthy_whenMarkerAndAllBinariesPresentAndExecutable() {
+        val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
+        File(usrDir, "python3").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "proot").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "hermes").apply { writeText("dummy"); setExecutable(true) }
+
+        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
+        marker.writeText("version=1\ntimestamp=123456\n")
+
+        val health = extractor.checkHealth()
+        assertTrue("Expected Healthy but got $health", health is HealthCheckResult.Healthy)
+    }
+
+    @Test
+    fun checkHealth_returnsCorrupted_whenCriticalBinaryMissing() {
+        val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
+        File(usrDir, "python3").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "proot").apply { writeText("dummy"); setExecutable(true) }
+        // Missing hermes binary
+
+        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
+        marker.writeText("version=1\ntimestamp=123456\n")
+
+        val health = extractor.checkHealth()
+        assertTrue("Expected Corrupted but got $health", health is HealthCheckResult.Corrupted)
+        val corrupted = health as HealthCheckResult.Corrupted
+        assertTrue(corrupted.issues.any { it.contains("bin/hermes") })
+        assertTrue(corrupted.details.contains("bin/hermes"))
+    }
+
+    @Test
+    fun checkHealth_returnsCorrupted_whenVersionMismatch() {
+        val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
+        File(usrDir, "python3").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "proot").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "hermes").apply { writeText("dummy"); setExecutable(true) }
+
+        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
+        marker.writeText("version=99\n")
+
+        val health = extractor.checkHealth()
+        assertTrue(health is HealthCheckResult.Corrupted)
+        val corrupted = health as HealthCheckResult.Corrupted
+        assertTrue(corrupted.issues.any { it.contains("version mismatch") || it.contains("expected version=1") })
+    }
+
+    @Test
+    fun checkHealth_returnsCorrupted_whenMarkerMissing_butUsrHasFiles() {
+        val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
+        File(usrDir, "python3").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "proot").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "hermes").apply { writeText("dummy"); setExecutable(true) }
+        // Marker missing
+
+        val health = extractor.checkHealth()
+        assertTrue(health is HealthCheckResult.Corrupted)
+        val corrupted = health as HealthCheckResult.Corrupted
+        assertTrue(corrupted.issues.any { it.contains("marker file (.bootstrap_complete) is missing") })
+    }
+
+    @Test
+    fun checkHealth_returnsCorrupted_whenBinaryIsNotRegularFile() {
+        val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
+        File(usrDir, "python3").apply { mkdirs() } // Directory instead of file
+        File(usrDir, "proot").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "hermes").apply { writeText("dummy"); setExecutable(true) }
+
+        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
+        marker.writeText("version=1\n")
+
+        val health = extractor.checkHealth()
+        assertTrue(health is HealthCheckResult.Corrupted)
+        val corrupted = health as HealthCheckResult.Corrupted
+        assertTrue(corrupted.issues.any { it.contains("not a regular file") })
+    }
+
+    @Test
+    fun repairFromStream_restoresBinaries_andPreservesUserDataFiles() = runTest(testDispatcher) {
+        // 1. Create simulated user database, checkpoint, and config in filesDir
+        val userDbDir = File(tempDir, "data").apply { mkdirs() }
+        val userDbFile = File(userDbDir, "user_episodic.db").apply { writeText("SQLITE_HEADER_PERSISTENT_DATA") }
+        val checkpointDir = File(tempDir, "checkpoints").apply { mkdirs() }
+        val checkpointFile = File(checkpointDir, "checkpoint_1.chk").apply { writeText("EPISODIC_STATE_DATA") }
+        val configFile = File(tempDir, "hermes.json").apply { writeText("{\"api_key\":\"secret\"}") }
+
+        // 2. Corrupt the userland by deleting a binary and breaking marker
+        val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
+        File(usrDir, "python3").apply { writeText("corrupt"); setExecutable(true) }
+        // proot and hermes missing
+        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
+        marker.writeText("version=1\n")
+
+        assertTrue(extractor.checkHealth() is HealthCheckResult.Corrupted)
+
+        // 3. Trigger repair from valid archive stream
+        val tarBytes = createTestTarXz(getStandardArchiveEntries())
+        val inStream = ByteArrayInputStream(tarBytes)
+        val progressList = mutableListOf<Float>()
+
+        val result = extractor.repairFromStream(inStream) { progress, _ ->
+            progressList.add(progress)
+        }
+
+        assertTrue("Repair result must be Success", result is ExtractionResult.Success)
+
+        // 4. Verify runtime is now healthy
+        val health = extractor.checkHealth()
+        assertTrue("Health check after repair must be Healthy", health is HealthCheckResult.Healthy)
+        assertTrue(extractor.isBootstrapInstalled())
+
+        // 5. Verify all user data files are strictly preserved
+        assertTrue(userDbFile.exists())
+        assertEquals("SQLITE_HEADER_PERSISTENT_DATA", userDbFile.readText())
+        assertTrue(checkpointFile.exists())
+        assertEquals("EPISODIC_STATE_DATA", checkpointFile.readText())
+        assertTrue(configFile.exists())
+        assertEquals("{\"api_key\":\"secret\"}", configFile.readText())
+
+        // 6. Verify binaries were re-extracted and made executable
+        assertTrue(File(tempDir, "usr/bin/python3").canExecute())
+        assertTrue(File(tempDir, "usr/bin/proot").canExecute())
+        assertTrue(File(tempDir, "usr/bin/hermes").canExecute())
+    }
+
+    @Test
+    fun repair_withoutAssetManager_returnsErrorResult() = runTest(testDispatcher) {
+        val result = extractor.repair("bootstrap-arm64.tar.xz")
+        assertTrue(result is ExtractionResult.Error)
+        val error = result as ExtractionResult.Error
+        assertTrue(error.message.contains("AssetManager is null"))
+    }
+
+    @Test
+    fun checkHealth_selfHealsNonExecutableBinary_whenPossible() {
+        val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
+        val py = File(usrDir, "python3").apply { writeText("dummy"); setExecutable(false) }
+        File(usrDir, "proot").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "hermes").apply { writeText("dummy"); setExecutable(true) }
+
+        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
+        marker.writeText("version=1\n")
+
+        val health = extractor.checkHealth()
+        assertTrue("Expected Healthy due to self-healing execute permission", health is HealthCheckResult.Healthy)
+        assertTrue(py.canExecute())
+    }
+
+    @Test
+    fun repairFromStream_whenUsrDirContainsReadOnlyFiles_successfullyCleansAndRepairs() = runTest(testDispatcher) {
+        val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
+        val readOnlyFile = File(usrDir, "locked_script.sh").apply {
+            writeText("READ_ONLY")
+            setWritable(false)
+        }
+        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME).apply { writeText("version=1\n") }
+
+        val tarBytes = createTestTarXz(getStandardArchiveEntries())
+        val inStream = ByteArrayInputStream(tarBytes)
+
+        val result = extractor.repairFromStream(inStream)
+
+        assertTrue("Repair must succeed even with read-only files: $result", result is ExtractionResult.Success)
+        assertTrue(extractor.isBootstrapInstalled())
+        assertFalse("Old read-only file must be removed", readOnlyFile.exists())
+    }
+
+    @Test
+    fun cleanUserland_deletesUsrDirAndMarker_preservesOtherFiles() {
         val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
         File(usrDir, "python3").writeText("test")
         val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME).apply { writeText("version=1\n") }
+        val userFile = File(tempDir, "agent_data.db").apply { writeText("keep me") }
 
         assertTrue(usrDir.exists())
         assertTrue(marker.exists())
+        assertTrue(userFile.exists())
 
         extractor.cleanUserland()
 
         assertFalse(extractor.usrDir.exists())
         assertFalse(extractor.markerFile.exists())
         assertFalse(extractor.isBootstrapInstalled())
+        assertTrue("User file must remain intact", userFile.exists())
+        assertEquals("keep me", userFile.readText())
     }
 }

@@ -39,5 +39,8 @@ data class ServerUiState(
     val isBootstrapping: Boolean = false,
     val isBootstrapComplete: Boolean = false,
     val bootstrapProgress: Float = 0f,
-    val bootstrapMessage: String = ""
+    val bootstrapMessage: String = "",
+    val isRuntimeCorrupted: Boolean = false,
+    val integrityWarning: String? = null,
+    val isRepairing: Boolean = false
 )

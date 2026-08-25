@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.node.engine.BootstrapExtractor
 import com.hermes.node.engine.ExtractionResult
+import com.hermes.node.engine.HealthCheckResult
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,31 +36,70 @@ class ServerViewModel(
         checkAndInitializeBootstrap()
     }
 
-    fun checkAndInitializeBootstrap() {
+    fun performHealthCheck(): HealthCheckResult {
         val extractor = bootstrapExtractor
-        if (extractor != null) {
-            if (extractor.isBootstrapInstalled()) {
+        if (extractor == null) {
+            _uiState.update {
+                it.copy(
+                    isBootstrapComplete = true,
+                    isBootstrapping = false,
+                    isRuntimeCorrupted = false,
+                    integrityWarning = null,
+                    bootstrapProgress = 1.0f,
+                    bootstrapMessage = "ARM64 Linux userland ready"
+                )
+            }
+            return HealthCheckResult.Healthy
+        }
+
+        val health = extractor.checkHealth()
+        when (health) {
+            is HealthCheckResult.Healthy -> {
                 _uiState.update {
                     it.copy(
                         isBootstrapComplete = true,
                         isBootstrapping = false,
+                        isRuntimeCorrupted = false,
+                        integrityWarning = null,
                         bootstrapProgress = 1.0f,
                         bootstrapMessage = "ARM64 Linux userland ready"
                     )
                 }
                 onAddLog("ARM64 Linux userland verified and ready.", LogLevel.INFO)
-            } else {
-                triggerBootstrap()
             }
-        } else {
-            _uiState.update {
-                it.copy(
-                    isBootstrapComplete = true,
-                    isBootstrapping = false,
-                    bootstrapProgress = 1.0f,
-                    bootstrapMessage = "ARM64 Linux userland ready"
-                )
+            is HealthCheckResult.NotInstalled -> {
+                _uiState.update {
+                    it.copy(
+                        isBootstrapComplete = false,
+                        isBootstrapping = false,
+                        isRuntimeCorrupted = false,
+                        integrityWarning = null,
+                        bootstrapProgress = 0f,
+                        bootstrapMessage = "ARM64 Linux userland not installed"
+                    )
+                }
             }
+            is HealthCheckResult.Corrupted -> {
+                _uiState.update {
+                    it.copy(
+                        isBootstrapComplete = false,
+                        isBootstrapping = false,
+                        isRuntimeCorrupted = true,
+                        integrityWarning = health.details.ifEmpty { "Corrupted userland binaries: ${health.issues.joinToString(", ")}" },
+                        bootstrapProgress = 0f,
+                        bootstrapMessage = "Runtime integrity check failed"
+                    )
+                }
+                onAddLog("Runtime integrity check failed: ${health.details}", LogLevel.WARN)
+            }
+        }
+        return health
+    }
+
+    fun checkAndInitializeBootstrap() {
+        val health = performHealthCheck()
+        if (health is HealthCheckResult.NotInstalled) {
+            triggerBootstrap()
         }
     }
 
@@ -73,6 +113,9 @@ class ServerViewModel(
             it.copy(
                 isBootstrapping = true,
                 isBootstrapComplete = false,
+                isRuntimeCorrupted = false,
+                integrityWarning = null,
+                isRepairing = false,
                 bootstrapProgress = 0.05f,
                 bootstrapMessage = "Preparing ARM64 Linux userland...",
                 errorMessage = null
@@ -92,27 +135,139 @@ class ServerViewModel(
 
             when (result) {
                 is ExtractionResult.Success -> {
-                    _uiState.update {
-                        it.copy(
-                            isBootstrapping = false,
-                            isBootstrapComplete = true,
-                            bootstrapProgress = 1.0f,
-                            bootstrapMessage = "ARM64 Linux userland ready"
-                        )
+                    val health = extractor.checkHealth()
+                    if (health is HealthCheckResult.Healthy) {
+                        _uiState.update {
+                            it.copy(
+                                isBootstrapping = false,
+                                isBootstrapComplete = true,
+                                isRuntimeCorrupted = false,
+                                integrityWarning = null,
+                                isRepairing = false,
+                                bootstrapProgress = 1.0f,
+                                bootstrapMessage = "ARM64 Linux userland ready"
+                            )
+                        }
+                        onAddLog("ARM64 Linux userland extracted and verified successfully.", LogLevel.INFO)
+                    } else {
+                        val warning = if (health is HealthCheckResult.Corrupted) health.details else "Health check failed after extraction"
+                        _uiState.update {
+                            it.copy(
+                                isBootstrapping = false,
+                                isBootstrapComplete = false,
+                                isRuntimeCorrupted = true,
+                                integrityWarning = warning,
+                                isRepairing = false,
+                                bootstrapProgress = 0f,
+                                bootstrapMessage = "Extraction completed with integrity warnings"
+                            )
+                        }
+                        onAddLog("Extraction completed with warnings: $warning", LogLevel.WARN)
                     }
-                    onAddLog("ARM64 Linux userland extracted and verified successfully.", LogLevel.INFO)
                 }
                 is ExtractionResult.Error -> {
                     _uiState.update {
                         it.copy(
                             isBootstrapping = false,
                             isBootstrapComplete = false,
+                            isRepairing = false,
                             bootstrapProgress = 0f,
                             bootstrapMessage = "Bootstrap extraction failed",
                             errorMessage = result.message
                         )
                     }
                     onAddLog("Bootstrap extraction error: ${result.message}", LogLevel.ERROR)
+                }
+            }
+        }
+    }
+
+    fun onRepairRuntime() {
+        val extractor = bootstrapExtractor ?: return
+        if (_uiState.value.status == ServerStatus.RUNNING || _uiState.value.status == ServerStatus.STARTING || _uiState.value.status == ServerStatus.STOPPING) {
+            metricsJob?.cancel()
+            metricsJob = null
+            transitionJob?.cancel()
+            transitionJob = null
+            _uiState.update {
+                it.copy(
+                    status = ServerStatus.STOPPED,
+                    uptimeSeconds = 0L,
+                    cpuUsagePercent = 0f,
+                    memoryUsageMb = 0L,
+                    tunnelUrl = null
+                )
+            }
+            onAddLog("Server daemon stopped for runtime environment repair.", LogLevel.INFO)
+        }
+        bootstrapJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isRepairing = true,
+                isBootstrapping = true,
+                isBootstrapComplete = false,
+                bootstrapProgress = 0.02f,
+                bootstrapMessage = "Repairing ARM64 Linux userland...",
+                errorMessage = null
+            )
+        }
+        onAddLog("Starting one-tap runtime environment repair...", LogLevel.INFO)
+
+        bootstrapJob = viewModelScope.launch(ioDispatcher) {
+            val result = extractor.repair { progress, message ->
+                _uiState.update {
+                    it.copy(
+                        bootstrapProgress = progress,
+                        bootstrapMessage = message
+                    )
+                }
+            }
+
+            when (result) {
+                is ExtractionResult.Success -> {
+                    val health = extractor.checkHealth()
+                    if (health is HealthCheckResult.Healthy) {
+                        _uiState.update {
+                            it.copy(
+                                isRepairing = false,
+                                isBootstrapping = false,
+                                isBootstrapComplete = true,
+                                isRuntimeCorrupted = false,
+                                integrityWarning = null,
+                                bootstrapProgress = 1.0f,
+                                bootstrapMessage = "ARM64 Linux userland ready"
+                            )
+                        }
+                        onAddLog("ARM64 Linux userland repaired and verified successfully.", LogLevel.INFO)
+                    } else {
+                        val warning = if (health is HealthCheckResult.Corrupted) health.details else "Health check failed after repair"
+                        _uiState.update {
+                            it.copy(
+                                isRepairing = false,
+                                isBootstrapping = false,
+                                isBootstrapComplete = false,
+                                isRuntimeCorrupted = true,
+                                integrityWarning = warning,
+                                bootstrapProgress = 0f,
+                                bootstrapMessage = "Repair completed with integrity warnings"
+                            )
+                        }
+                        onAddLog("Runtime repair completed with warnings: $warning", LogLevel.WARN)
+                    }
+                }
+                is ExtractionResult.Error -> {
+                    _uiState.update {
+                        it.copy(
+                            isRepairing = false,
+                            isBootstrapping = false,
+                            isBootstrapComplete = false,
+                            isRuntimeCorrupted = true,
+                            bootstrapProgress = 0f,
+                            bootstrapMessage = "Repair failed",
+                            errorMessage = result.message
+                        )
+                    }
+                    onAddLog("Runtime repair error: ${result.message}", LogLevel.ERROR)
                 }
             }
         }
@@ -130,12 +285,44 @@ class ServerViewModel(
             return
         }
 
+        if (_uiState.value.isRepairing) {
+            onAddLog("Cannot start server: Linux userland repair in progress.", LogLevel.WARN)
+            return
+        }
+
         if (_uiState.value.isBootstrapping) {
             onAddLog("Cannot start server: Linux userland extraction in progress.", LogLevel.WARN)
             return
         }
 
-        if (!_uiState.value.isBootstrapComplete || (bootstrapExtractor != null && !bootstrapExtractor.isBootstrapInstalled())) {
+        if (_uiState.value.isRuntimeCorrupted) {
+            val warning = _uiState.value.integrityWarning ?: "Runtime integrity check failed"
+            onSetError("Cannot start server: Runtime is corrupted ($warning). Please tap Repair Runtime.")
+            return
+        }
+
+        if (bootstrapExtractor != null) {
+            val health = bootstrapExtractor.checkHealth()
+            if (health is HealthCheckResult.Corrupted) {
+                _uiState.update {
+                    it.copy(
+                        isRuntimeCorrupted = true,
+                        integrityWarning = health.details,
+                        isBootstrapComplete = false
+                    )
+                }
+                onSetError("Cannot start server: Runtime is corrupted (${health.details}). Please tap Repair Runtime.")
+                return
+            } else if (health is HealthCheckResult.NotInstalled) {
+                _uiState.update {
+                    it.copy(
+                        isBootstrapComplete = false
+                    )
+                }
+                onSetError("Cannot start server: Linux userland is not installed. Please run bootstrap.")
+                return
+            }
+        } else if (!_uiState.value.isBootstrapComplete) {
             onSetError("Cannot start server: Linux userland is not installed or corrupted. Please run bootstrap.")
             return
         }

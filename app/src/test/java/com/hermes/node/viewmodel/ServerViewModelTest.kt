@@ -354,6 +354,29 @@ class ServerViewModelTest {
     }
 
     @Test
+    fun onStartServer_whenRepairing_doesNotStart() {
+        val fakeExtractor = FakeBootstrapExtractor(
+            healthResult = com.hermes.node.engine.HealthCheckResult.Corrupted(listOf("Missing python3"), "Missing python3"),
+            shouldRepairSucceed = false
+        )
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onRepairRuntime()
+        assertTrue(vm.uiState.value.isRepairing)
+
+        vm.onStartServer()
+
+        val state = vm.uiState.value
+        assertEquals(ServerStatus.STOPPED, state.status)
+        assertTrue(state.logs.any { it.message.contains("Linux userland repair in progress") })
+        vm.stopMonitoring()
+    }
+
+    @Test
     fun triggerBootstrap_retriesExtractionSuccessfully() = runTest(testDispatcher) {
         val fakeExtractor = FakeBootstrapExtractor(installed = false, shouldSucceed = false)
         val vm = ServerViewModel(
@@ -416,14 +439,206 @@ class ServerViewModelTest {
         assertEquals(ServerStatus.STOPPED, viewModel.uiState.value.status)
     }
 
-    private class FakeBootstrapExtractor(
-        var installed: Boolean = false,
-        var shouldSucceed: Boolean = true,
-        var errorMessage: String = "Failed extraction"
-    ) : com.hermes.node.engine.BootstrapExtractor(filesDir = java.io.File("."), assetManager = null) {
-        var extractCalls = 0
+    @Test
+    fun init_withCorruptedExtractor_setsRuntimeCorruptedState_andIntegrityWarning() {
+        val fakeExtractor = FakeBootstrapExtractor(
+            healthResult = com.hermes.node.engine.HealthCheckResult.Corrupted(
+                listOf("Missing critical binary: bin/python3"),
+                "Missing critical binary: bin/python3"
+            )
+        )
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
 
-        override fun isBootstrapInstalled(): Boolean = installed
+        val state = vm.uiState.value
+        assertTrue(state.isRuntimeCorrupted)
+        assertFalse(state.isBootstrapComplete)
+        assertEquals("Missing critical binary: bin/python3", state.integrityWarning)
+        assertEquals(0, fakeExtractor.extractCalls)
+        assertTrue(state.logs.any { it.level == LogLevel.WARN && it.message.contains("Runtime integrity check failed") })
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onStartServer_whenRuntimeCorrupted_blocksServerStart_andSetsErrorState() {
+        val fakeExtractor = FakeBootstrapExtractor(
+            healthResult = com.hermes.node.engine.HealthCheckResult.Corrupted(
+                listOf("Missing critical binary: bin/python3"),
+                "Missing critical binary: bin/python3"
+            )
+        )
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onStartServer()
+
+        val state = vm.uiState.value
+        assertEquals(ServerStatus.ERROR, state.status)
+        assertTrue(state.errorMessage?.contains("Runtime is corrupted") == true)
+        assertTrue(state.errorMessage?.contains("Missing critical binary: bin/python3") == true)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onRepairRuntime_whenSuccessful_restoresUserland_andTransitionsToHealthyState() = runTest(testDispatcher) {
+        val fakeExtractor = FakeBootstrapExtractor(
+            healthResult = com.hermes.node.engine.HealthCheckResult.Corrupted(
+                listOf("Missing critical binary: bin/hermes"),
+                "Missing critical binary: bin/hermes"
+            ),
+            shouldRepairSucceed = true
+        )
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        assertTrue(vm.uiState.value.isRuntimeCorrupted)
+
+        vm.onRepairRuntime()
+        assertTrue(vm.uiState.value.isRepairing)
+        assertTrue(vm.uiState.value.isBootstrapping)
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isRepairing)
+        assertFalse(state.isBootstrapping)
+        assertFalse(state.isRuntimeCorrupted)
+        assertTrue(state.isBootstrapComplete)
+        assertNull(state.integrityWarning)
+        assertEquals(1, fakeExtractor.repairCalls)
+        assertTrue(state.logs.any { it.message.contains("repaired and verified successfully") })
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onRepairRuntime_stopsRunningServer_beforeRepairing() = runTest(testDispatcher) {
+        val fakeExtractor = FakeBootstrapExtractor(installed = true)
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+
+        fakeExtractor.healthResult = com.hermes.node.engine.HealthCheckResult.Corrupted(listOf("Damaged"), "Damaged")
+        vm.onRepairRuntime()
+
+        // Server is immediately stopped to prevent race conditions during userland cleanup
+        assertEquals(ServerStatus.STOPPED, vm.uiState.value.status)
+        assertTrue(vm.uiState.value.isRepairing)
+
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(ServerStatus.STOPPED, vm.uiState.value.status)
+        assertTrue(vm.uiState.value.isBootstrapComplete)
+        assertFalse(vm.uiState.value.isRuntimeCorrupted)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onRepairRuntime_whenRepairFails_setsErrorState_andPreservesCorruptedFlag() = runTest(testDispatcher) {
+        val fakeExtractor = FakeBootstrapExtractor(
+            healthResult = com.hermes.node.engine.HealthCheckResult.Corrupted(listOf("Missing python3"), "Missing python3"),
+            shouldRepairSucceed = false,
+            errorMessage = "I/O Disk full during repair"
+        )
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onRepairRuntime()
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isRepairing)
+        assertFalse(state.isBootstrapping)
+        assertTrue(state.isRuntimeCorrupted)
+        assertEquals("I/O Disk full during repair", state.errorMessage)
+        assertTrue(state.logs.any { it.level == LogLevel.ERROR && it.message.contains("I/O Disk full during repair") })
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun performHealthCheck_dynamicallyUpdatesUiState_whenStatusChanges() {
+        val fakeExtractor = FakeBootstrapExtractor(installed = true)
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        assertTrue(vm.uiState.value.isBootstrapComplete)
+        assertFalse(vm.uiState.value.isRuntimeCorrupted)
+
+        // Simulate external corruption
+        fakeExtractor.healthResult = com.hermes.node.engine.HealthCheckResult.Corrupted(listOf("Missing proot"), "Missing proot")
+        val result = vm.performHealthCheck()
+
+        assertTrue(result is com.hermes.node.engine.HealthCheckResult.Corrupted)
+        assertTrue(vm.uiState.value.isRuntimeCorrupted)
+        assertFalse(vm.uiState.value.isBootstrapComplete)
+        assertEquals("Missing proot", vm.uiState.value.integrityWarning)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onStartServer_catchesDynamicDiskCorruption_whenPreviouslyHealthy() {
+        val fakeExtractor = FakeBootstrapExtractor(installed = true)
+        val vm = ServerViewModel(
+            bootstrapExtractor = fakeExtractor,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        assertTrue(vm.uiState.value.isBootstrapComplete)
+        assertFalse(vm.uiState.value.isRuntimeCorrupted)
+
+        // Dynamic corruption occurs on disk before start is tapped
+        fakeExtractor.healthResult = com.hermes.node.engine.HealthCheckResult.Corrupted(
+            listOf("Missing critical binary: bin/hermes"),
+            "Missing critical binary: bin/hermes"
+        )
+
+        vm.onStartServer()
+
+        val state = vm.uiState.value
+        assertEquals(ServerStatus.ERROR, state.status)
+        assertTrue(state.isRuntimeCorrupted)
+        assertFalse(state.isBootstrapComplete)
+        assertEquals("Missing critical binary: bin/hermes", state.integrityWarning)
+        assertTrue(state.errorMessage?.contains("Runtime is corrupted") == true)
+        vm.stopMonitoring()
+    }
+
+    private class FakeBootstrapExtractor(
+        var healthResult: com.hermes.node.engine.HealthCheckResult = com.hermes.node.engine.HealthCheckResult.NotInstalled,
+        var shouldSucceed: Boolean = true,
+        var errorMessage: String = "Failed extraction",
+        var shouldRepairSucceed: Boolean = true
+    ) : com.hermes.node.engine.BootstrapExtractor(filesDir = java.io.File("."), assetManager = null) {
+        constructor(installed: Boolean, shouldSucceed: Boolean = true, errorMessage: String = "Failed extraction") : this(
+            healthResult = if (installed) com.hermes.node.engine.HealthCheckResult.Healthy else com.hermes.node.engine.HealthCheckResult.NotInstalled,
+            shouldSucceed = shouldSucceed,
+            errorMessage = errorMessage
+        )
+
+        var extractCalls = 0
+        var repairCalls = 0
+
+        override fun checkHealth(): com.hermes.node.engine.HealthCheckResult = healthResult
+
+        override fun isBootstrapInstalled(): Boolean = healthResult is com.hermes.node.engine.HealthCheckResult.Healthy
 
         override suspend fun extract(
             assetName: String,
@@ -432,8 +647,24 @@ class ServerViewModelTest {
             extractCalls++
             onProgress?.invoke(0.5f, "Extracting fake...")
             return if (shouldSucceed) {
-                installed = true
+                healthResult = com.hermes.node.engine.HealthCheckResult.Healthy
                 onProgress?.invoke(1.0f, "Complete")
+                com.hermes.node.engine.ExtractionResult.Success(java.io.File("./usr"))
+            } else {
+                com.hermes.node.engine.ExtractionResult.Error(errorMessage)
+            }
+        }
+
+        override suspend fun repair(
+            assetName: String,
+            onProgress: ((progress: Float, message: String) -> Unit)?
+        ): com.hermes.node.engine.ExtractionResult {
+            repairCalls++
+            onProgress?.invoke(0.1f, "Cleaning fake...")
+            onProgress?.invoke(0.5f, "Repairing fake...")
+            return if (shouldRepairSucceed) {
+                healthResult = com.hermes.node.engine.HealthCheckResult.Healthy
+                onProgress?.invoke(1.0f, "Repair Complete")
                 com.hermes.node.engine.ExtractionResult.Success(java.io.File("./usr"))
             } else {
                 com.hermes.node.engine.ExtractionResult.Error(errorMessage)
