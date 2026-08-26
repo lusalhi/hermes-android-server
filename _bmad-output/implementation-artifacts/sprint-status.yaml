@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-24-2026 16:14
-last_updated: 08-25-2026 07:11
+last_updated: 08-26-2026 04:04
 project: hermes-android-server
 project_key: NOKEY
 tracking_system: file-system
@@ -49,7 +49,7 @@ development_status:
 
   epic-3: in-progress
   3-1-android-foreground-service-with-partial-wakelock: review
-  3-2-native-child-process-controller-with-graceful-signal-handlin: backlog
+  3-2-native-child-process-controller-with-graceful-signal-handlin: review
   3-3-battery-optimization-exemption-boot-completed-auto-start: backlog
   epic-3-retrospective: optional
 

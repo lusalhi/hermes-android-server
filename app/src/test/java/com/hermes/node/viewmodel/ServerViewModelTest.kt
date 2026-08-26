@@ -957,6 +957,54 @@ class ServerViewModelTest {
         vm.stopMonitoring()
     }
 
+    @Test
+    fun processObserver_whenProcessTerminated_transitionsViewModelToStopped() = runTest(testDispatcher) {
+        val processStateFlow = kotlinx.coroutines.flow.MutableStateFlow(com.hermes.node.engine.ProcessState.RUNNING)
+        val vm = ServerViewModel(
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            processStateFlow = processStateFlow
+        )
+
+        vm.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+
+        // Process unexpectedly terminated
+        processStateFlow.value = com.hermes.node.engine.ProcessState.TERMINATED
+        advanceTimeBy(100)
+
+        val state = vm.uiState.value
+        assertEquals(ServerStatus.STOPPED, state.status)
+        assertEquals(0L, state.uptimeSeconds)
+        assertTrue(state.logs.any { it.message.contains("Sub-process terminated unexpectedly") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun processObserver_whenProcessError_transitionsViewModelToError() = runTest(testDispatcher) {
+        val processStateFlow = kotlinx.coroutines.flow.MutableStateFlow(com.hermes.node.engine.ProcessState.STARTING)
+        val vm = ServerViewModel(
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher,
+            processStateFlow = processStateFlow
+        )
+
+        vm.onStartServer()
+        assertEquals(ServerStatus.STARTING, vm.uiState.value.status)
+
+        // Process startup failed with ERROR
+        processStateFlow.value = com.hermes.node.engine.ProcessState.ERROR
+        advanceTimeBy(100)
+
+        val state = vm.uiState.value
+        assertEquals(ServerStatus.ERROR, state.status)
+        assertTrue(state.errorMessage?.contains("Sub-process execution failed") == true)
+
+        vm.stopMonitoring()
+    }
+
     private class FakeBootstrapExtractor(
         var healthResult: com.hermes.node.engine.HealthCheckResult = com.hermes.node.engine.HealthCheckResult.NotInstalled,
         var shouldSucceed: Boolean = true,

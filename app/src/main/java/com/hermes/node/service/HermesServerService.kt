@@ -9,13 +9,30 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.ServiceCompat
+import com.hermes.node.engine.ProcessConfig
+import com.hermes.node.engine.ProcessController
+import com.hermes.node.engine.ProcessControllerInterface
+import com.hermes.node.engine.ProcessStopResult
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.runBlocking
+import java.io.File
 
 open class HermesServerService : Service() {
 
     var wakeLockManager: WakeLockManagerInterface? = null
+    var processController: ProcessControllerInterface? = null
+    internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+
+    private val safeFilesDir: File
+        get() = try {
+            filesDir ?: File(".")
+        } catch (_: Throwable) {
+            File(".")
+        }
 
     inner class LocalBinder : Binder() {
         fun getService(): HermesServerService = this@HermesServerService
@@ -30,7 +47,40 @@ open class HermesServerService : Service() {
         if (wakeLockManager == null) {
             wakeLockManager = WakeLockManager.create(this)
         }
+        if (processController == null) {
+            processController = ProcessController(filesDir = safeFilesDir)
+        }
+        setupProcessExitListener()
         NotificationHelper.createNotificationChannel(this)
+    }
+
+    fun setupProcessExitListener() {
+        processController?.addExitListener { exitCode ->
+            try {
+                Log.w(TAG, "Sub-process terminated with exit code: $exitCode. Cleaning up service state...")
+            } catch (ignored: Throwable) {}
+            onProcessTerminatedUnexpectedly(exitCode)
+        }
+    }
+
+    internal open fun onProcessTerminatedUnexpectedly(exitCode: Int) {
+        try {
+            if (wakeLockManager?.isHeld == true) {
+                wakeLockManager?.release()
+            }
+        } catch (e: Exception) {
+            try {
+                Log.w(TAG, "Error releasing WakeLock on unexpected termination: ${e.message}")
+            } catch (ignored: Throwable) {}
+        }
+        _isRunning.value = false
+        try {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        } catch (ignored: Throwable) {}
+        try {
+            NotificationHelper.cancelNotification(this)
+        } catch (ignored: Throwable) {}
+        stopSelfService()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -55,6 +105,17 @@ open class HermesServerService : Service() {
 
     override fun onDestroy() {
         try {
+            if (processController?.isAlive == true) {
+                runBlocking(ioDispatcher) {
+                    processController?.stop()
+                }
+            }
+        } catch (e: Exception) {
+            try {
+                Log.w(TAG, "Error stopping process on destroy: ${e.message}")
+            } catch (ignored: Throwable) {}
+        }
+        try {
             if (wakeLockManager?.isHeld == true) {
                 wakeLockManager?.release()
             }
@@ -64,13 +125,15 @@ open class HermesServerService : Service() {
             } catch (ignored: Throwable) {}
         }
         _isRunning.value = false
-        NotificationHelper.cancelNotification(this)
+        try {
+            NotificationHelper.cancelNotification(this)
+        } catch (ignored: Throwable) {}
         try {
             super.onDestroy()
         } catch (ignored: Throwable) {}
     }
 
-    fun startForegroundServiceInternal(): Boolean {
+    fun startForegroundServiceInternal(config: ProcessConfig? = null): Boolean {
         if (_isRunning.value) {
             return true
         }
@@ -121,6 +184,33 @@ open class HermesServerService : Service() {
             } catch (ignored: Throwable) {}
         }
 
+        val controller = processController
+        if (controller != null) {
+            val targetConfig = config ?: ProcessConfig.createHermesDaemonConfig(safeFilesDir)
+            val startResult = runBlocking(ioDispatcher) {
+                controller.start(targetConfig)
+            }
+            if (startResult.isFailure) {
+                try {
+                    Log.e(TAG, "Failed to start child process: ${startResult.exceptionOrNull()?.message}")
+                } catch (ignored: Throwable) {}
+                try {
+                    if (wakeLockManager?.isHeld == true) {
+                        wakeLockManager?.release()
+                    }
+                } catch (ignored: Throwable) {}
+                _isRunning.value = false
+                try {
+                    ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                } catch (ignored: Throwable) {}
+                try {
+                    NotificationHelper.cancelNotification(this)
+                } catch (ignored: Throwable) {}
+                stopSelfService()
+                return false
+            }
+        }
+
         _isRunning.value = true
         try {
             Log.i(TAG, "HermesServerService started in foreground")
@@ -128,7 +218,13 @@ open class HermesServerService : Service() {
         return true
     }
 
-    fun stopForegroundServiceInternal() {
+    fun stopForegroundServiceInternal(): ProcessStopResult {
+        val stopResult = processController?.let { controller ->
+            runBlocking(ioDispatcher) {
+                controller.stop()
+            }
+        } ?: ProcessStopResult.ALREADY_STOPPED
+
         try {
             if (wakeLockManager?.isHeld == true) {
                 wakeLockManager?.release()
@@ -158,6 +254,7 @@ open class HermesServerService : Service() {
         try {
             Log.i(TAG, "HermesServerService stopped")
         } catch (ignored: Throwable) {}
+        return stopResult
     }
 
     internal open fun stopSelfService() {

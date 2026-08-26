@@ -13,6 +13,8 @@ import com.hermes.node.engine.ExtractionResult
 import com.hermes.node.engine.HealthCheckResult
 import android.content.Context
 import com.hermes.node.service.HermesServerService
+import com.hermes.node.engine.ProcessControllerInterface
+import com.hermes.node.engine.ProcessState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,6 +31,8 @@ class ServerViewModel(
     private val bootstrapExtractor: BootstrapExtractor? = null,
     private val configRepository: ConfigRepository? = null,
     private val configSerializer: ConfigSerializer? = null,
+    private val processController: ProcessControllerInterface? = null,
+    private val processStateFlow: StateFlow<ProcessState>? = null,
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val serviceRunningFlow: StateFlow<Boolean>? = null,
@@ -45,6 +49,7 @@ class ServerViewModel(
     private var bootstrapJob: Job? = null
     private var saveSettingsJob: Job? = null
     private var serviceObserverJob: Job? = null
+    private var processObserverJob: Job? = null
     private val maxLogCapacity = 2000
 
     init {
@@ -53,6 +58,7 @@ class ServerViewModel(
         onAddLog("Hermes Node initialized. Ready to start.", LogLevel.INFO)
         checkAndInitializeBootstrap()
         observeServiceState()
+        observeProcessState()
     }
 
     fun performHealthCheck(): HealthCheckResult {
@@ -661,6 +667,42 @@ class ServerViewModel(
         }
     }
 
+    private fun observeProcessState() {
+        val flow = processStateFlow ?: processController?.state ?: return
+        processObserverJob?.cancel()
+        processObserverJob = viewModelScope.launch {
+            flow.collect { pState ->
+                when (pState) {
+                    ProcessState.TERMINATED -> {
+                        val currentStatus = _uiState.value.status
+                        if (currentStatus == ServerStatus.RUNNING || currentStatus == ServerStatus.STARTING) {
+                            metricsJob?.cancel()
+                            metricsJob = null
+                            transitionJob?.cancel()
+                            _uiState.update {
+                                it.copy(
+                                    status = ServerStatus.STOPPED,
+                                    uptimeSeconds = 0L,
+                                    cpuUsagePercent = 0f,
+                                    memoryUsageMb = 0L,
+                                    tunnelUrl = null
+                                )
+                            }
+                            onAddLog("Sub-process terminated unexpectedly.", LogLevel.WARN)
+                        }
+                    }
+                    ProcessState.ERROR -> {
+                        val currentStatus = _uiState.value.status
+                        if (currentStatus == ServerStatus.STARTING || currentStatus == ServerStatus.RUNNING) {
+                            onSetError("Sub-process execution failed.")
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
     fun stopMonitoring() {
         metricsJob?.cancel()
         metricsJob = null
@@ -694,5 +736,6 @@ class ServerViewModel(
         bootstrapJob?.cancel()
         saveSettingsJob?.cancel()
         serviceObserverJob?.cancel()
+        processObserverJob?.cancel()
     }
 }
