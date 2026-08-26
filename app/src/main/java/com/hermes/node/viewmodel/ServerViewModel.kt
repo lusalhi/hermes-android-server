@@ -15,6 +15,7 @@ import android.content.Context
 import com.hermes.node.service.BatteryOptimizationHelper
 import com.hermes.node.service.BatteryOptimizationHelperInterface
 import com.hermes.node.service.HermesServerService
+import com.hermes.node.engine.LogStreamerInterface
 import com.hermes.node.engine.ProcessControllerInterface
 import com.hermes.node.engine.ProcessState
 import kotlinx.coroutines.CoroutineDispatcher
@@ -40,7 +41,8 @@ class ServerViewModel(
     private val serviceRunningFlow: StateFlow<Boolean>? = null,
     private val startServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.start(ctx) },
     private val stopServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.stop(ctx) },
-    private val batteryOptimizationHelper: BatteryOptimizationHelperInterface? = BatteryOptimizationHelper()
+    private val batteryOptimizationHelper: BatteryOptimizationHelperInterface? = BatteryOptimizationHelper(),
+    private val logStreamer: LogStreamerInterface? = null
 ) : ViewModel() {
 
     private val context: Context? = context?.applicationContext ?: context
@@ -53,11 +55,13 @@ class ServerViewModel(
     private var saveSettingsJob: Job? = null
     private var serviceObserverJob: Job? = null
     private var processObserverJob: Job? = null
+    private var logObserverJob: Job? = null
     private val maxLogCapacity = 2000
 
     init {
         loadPersistedConfig()
         checkBatteryOptimizationStatus()
+        observeLogStreamer()
         // Initial welcome log
         onAddLog("Hermes Node initialized. Ready to start.", LogLevel.INFO)
         checkAndInitializeBootstrap()
@@ -439,15 +443,23 @@ class ServerViewModel(
     }
 
     fun onAddLog(message: String, level: LogLevel = LogLevel.INFO) {
-        val entry = LogEntry(message = message, level = level)
-        _uiState.update { current ->
-            val updatedLogs = (current.logs + entry).takeLast(maxLogCapacity)
-            current.copy(logs = updatedLogs)
+        if (logStreamer != null) {
+            logStreamer.append(LogEntry(message = message, level = level))
+        } else {
+            val entry = LogEntry(message = message, level = level)
+            _uiState.update { current ->
+                val updatedLogs = (current.logs + entry).takeLast(maxLogCapacity)
+                current.copy(logs = updatedLogs)
+            }
         }
     }
 
     fun onClearLogs() {
-        _uiState.update { it.copy(logs = emptyList()) }
+        if (logStreamer != null) {
+            logStreamer.clear()
+        } else {
+            _uiState.update { it.copy(logs = emptyList()) }
+        }
     }
 
     fun loadPersistedConfig() {
@@ -787,6 +799,16 @@ class ServerViewModel(
         }
     }
 
+    private fun observeLogStreamer() {
+        val streamer = logStreamer ?: return
+        logObserverJob?.cancel()
+        logObserverJob = viewModelScope.launch {
+            streamer.logsFlow.collect { logsList ->
+                _uiState.update { it.copy(logs = logsList) }
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         metricsJob?.cancel()
@@ -796,5 +818,7 @@ class ServerViewModel(
         saveSettingsJob?.cancel()
         serviceObserverJob?.cancel()
         processObserverJob?.cancel()
+        logObserverJob?.cancel()
+        logObserverJob = null
     }
 }

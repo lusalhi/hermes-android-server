@@ -1264,4 +1264,78 @@ class ServerViewModelTest {
             }
         }
     }
+
+    @Test
+    fun logStreamer_integrationWithViewModel() = runTest(testDispatcher) {
+        val fakeLogStreamer = FakeLogStreamer()
+        val vm = ServerViewModel(
+            logStreamer = fakeLogStreamer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testScheduler.advanceUntilIdle()
+
+        // Initial welcome log added to fakeLogStreamer
+        assertEquals(1, fakeLogStreamer.appendCalls)
+        assertTrue(fakeLogStreamer.getLogs().any { it.message.contains("Hermes Node initialized") })
+        assertTrue(vm.uiState.value.logs.any { it.message.contains("Hermes Node initialized") })
+
+        // onAddLog calls streamer
+        vm.onAddLog("Custom engine log", LogLevel.WARN)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(2, fakeLogStreamer.appendCalls)
+        assertTrue(vm.uiState.value.logs.any { it.level == LogLevel.WARN && it.message == "Custom engine log" })
+
+        // External log pushed by engine/streamer
+        fakeLogStreamer.append("External log line", LogLevel.ERROR)
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.logs.any { it.level == LogLevel.ERROR && it.message == "External log line" })
+
+        // onClearLogs clears streamer and flow
+        vm.onClearLogs()
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(1, fakeLogStreamer.clearCalls)
+        assertTrue(vm.uiState.value.logs.isEmpty())
+        assertTrue(fakeLogStreamer.getLogs().isEmpty())
+
+        vm.stopMonitoring()
+    }
+
+    private class FakeLogStreamer : com.hermes.node.engine.LogStreamerInterface {
+        private val _logsFlow = kotlinx.coroutines.flow.MutableStateFlow<List<LogEntry>>(emptyList())
+        override val logsFlow: kotlinx.coroutines.flow.StateFlow<List<LogEntry>> = _logsFlow
+        override val capacity: Int = 2000
+        override var isStreaming: Boolean = false
+
+        var appendCalls = 0
+        var clearCalls = 0
+
+        override fun start(stdout: java.io.InputStream?, stderr: java.io.InputStream?) {
+            isStreaming = true
+        }
+
+        override fun stop() {
+            isStreaming = false
+        }
+
+        override fun clear() {
+            clearCalls++
+            _logsFlow.value = emptyList()
+        }
+
+        override fun append(entry: LogEntry) {
+            appendCalls++
+            _logsFlow.value = _logsFlow.value + entry
+        }
+
+        override fun append(message: String, level: LogLevel) {
+            append(LogEntry(message = message, level = level))
+        }
+
+        override fun getLogs(): List<LogEntry> = _logsFlow.value
+    }
 }

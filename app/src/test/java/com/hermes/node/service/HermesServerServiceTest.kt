@@ -213,9 +213,49 @@ class HermesServerServiceTest {
         assertEquals(service, binder.getService())
     }
 
+    @Test
+    fun startAndStop_managesLogStreamerLifecycle() {
+        val fakeLogStreamer = FakeLogStreamer()
+        val service = TestableHermesServerService(fakeWakeLock, fakeProcessController, fakeLogStreamer)
+
+        assertEquals(0, fakeLogStreamer.startCalls)
+        assertEquals(0, fakeLogStreamer.stopCalls)
+
+        val startResult = service.startForegroundServiceInternal()
+        assertTrue(startResult)
+        assertEquals(1, fakeLogStreamer.startCalls)
+
+        val stopResult = service.stopForegroundServiceInternal()
+        assertEquals(ProcessStopResult.GRACEFUL_SIGTERM, stopResult)
+        assertEquals(1, fakeLogStreamer.stopCalls)
+    }
+
+    @Test
+    fun onUnexpectedProcessExit_stopsLogStreamer() {
+        val fakeLogStreamer = FakeLogStreamer()
+        val service = TestableHermesServerService(fakeWakeLock, fakeProcessController, fakeLogStreamer)
+        service.startForegroundServiceInternal()
+        assertEquals(1, fakeLogStreamer.startCalls)
+
+        fakeProcessController.triggerUnexpectedExit(137)
+        assertEquals(1, fakeLogStreamer.stopCalls)
+    }
+
+    @Test
+    fun onDestroy_stopsLogStreamer() {
+        val fakeLogStreamer = FakeLogStreamer()
+        val service = TestableHermesServerService(fakeWakeLock, fakeProcessController, fakeLogStreamer)
+        service.startForegroundServiceInternal()
+        assertEquals(1, fakeLogStreamer.startCalls)
+
+        service.onDestroy()
+        assertEquals(1, fakeLogStreamer.stopCalls)
+    }
+
     private class TestableHermesServerService(
         fakeWl: FakeWakeLockManager,
-        fakePc: FakeProcessController
+        fakePc: FakeProcessController,
+        fakeLs: FakeLogStreamer = FakeLogStreamer()
     ) : HermesServerService() {
         var stopSelfCalled = false
         var testAction: String? = null
@@ -223,6 +263,7 @@ class HermesServerServiceTest {
         init {
             this.wakeLockManager = fakeWl
             this.processController = fakePc
+            this.logStreamer = fakeLs
             setupProcessExitListener()
             val mockContext = object : ContextWrapper(null) {
                 private val appInfo = ApplicationInfo().apply { targetSdkVersion = 34 }
@@ -247,6 +288,42 @@ class HermesServerServiceTest {
         override fun stopSelfService() {
             stopSelfCalled = true
         }
+    }
+
+    private class FakeLogStreamer : com.hermes.node.engine.LogStreamerInterface {
+        private val _logsFlow = MutableStateFlow<List<com.hermes.node.viewmodel.LogEntry>>(emptyList())
+        override val logsFlow: StateFlow<List<com.hermes.node.viewmodel.LogEntry>> = _logsFlow.asStateFlow()
+        override val capacity: Int = 2000
+        override var isStreaming: Boolean = false
+
+        var startCalls = 0
+        var stopCalls = 0
+        var clearCalls = 0
+
+        override fun start(stdout: InputStream?, stderr: InputStream?) {
+            startCalls++
+            isStreaming = true
+        }
+
+        override fun stop() {
+            stopCalls++
+            isStreaming = false
+        }
+
+        override fun clear() {
+            clearCalls++
+            _logsFlow.value = emptyList()
+        }
+
+        override fun append(entry: com.hermes.node.viewmodel.LogEntry) {
+            _logsFlow.value = _logsFlow.value + entry
+        }
+
+        override fun append(message: String, level: com.hermes.node.viewmodel.LogLevel) {
+            append(com.hermes.node.viewmodel.LogEntry(message = message, level = level))
+        }
+
+        override fun getLogs(): List<com.hermes.node.viewmodel.LogEntry> = _logsFlow.value
     }
 
     private class FakeWakeLockManager : WakeLockManagerInterface {

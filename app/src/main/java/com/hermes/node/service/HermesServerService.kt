@@ -9,6 +9,8 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.ServiceCompat
+import com.hermes.node.engine.LogStreamer
+import com.hermes.node.engine.LogStreamerInterface
 import com.hermes.node.engine.ProcessConfig
 import com.hermes.node.engine.ProcessController
 import com.hermes.node.engine.ProcessControllerInterface
@@ -31,6 +33,7 @@ open class HermesServerService : Service() {
 
     var wakeLockManager: WakeLockManagerInterface? = null
     var processController: ProcessControllerInterface? = null
+    var logStreamer: LogStreamerInterface? = null
     internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
     private var serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var processExitListener: ((Int) -> Unit)? = null
@@ -59,6 +62,9 @@ open class HermesServerService : Service() {
         if (processController == null) {
             processController = ProcessController(filesDir = safeFilesDir)
         }
+        if (logStreamer == null) {
+            logStreamer = LogStreamer(ioDispatcher = ioDispatcher)
+        }
         setupProcessExitListener()
         NotificationHelper.createNotificationChannel(this)
     }
@@ -86,6 +92,9 @@ open class HermesServerService : Service() {
     }
 
     internal open fun onProcessTerminatedUnexpectedly(exitCode: Int) {
+        try {
+            logStreamer?.stop()
+        } catch (ignored: Throwable) {}
         try {
             if (wakeLockManager?.isHeld == true) {
                 wakeLockManager?.release()
@@ -131,6 +140,9 @@ open class HermesServerService : Service() {
         processExitListener = null
         processStateCollectorJob?.cancel()
         processStateCollectorJob = null
+        try {
+            logStreamer?.stop()
+        } catch (ignored: Throwable) {}
         try {
             if (processController != null) {
                 runBlocking(ioDispatcher) {
@@ -243,6 +255,9 @@ open class HermesServerService : Service() {
                 return false
             } else {
                 _processState.value = ProcessState.RUNNING
+                try {
+                    logStreamer?.start(controller.stdout, controller.stderr)
+                } catch (ignored: Throwable) {}
             }
         }
 
@@ -254,6 +269,9 @@ open class HermesServerService : Service() {
     }
 
     fun stopForegroundServiceInternal(): ProcessStopResult {
+        try {
+            logStreamer?.stop()
+        } catch (ignored: Throwable) {}
         val stopResult = processController?.let { controller ->
             runBlocking(ioDispatcher) {
                 controller.stop()
