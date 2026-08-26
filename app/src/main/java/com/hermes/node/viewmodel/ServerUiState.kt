@@ -45,5 +45,7 @@ data class ServerUiState(
     val isRepairing: Boolean = false,
     val isSavingSettings: Boolean = false,
     val isSettingsSaved: Boolean = false,
-    val configSaveMessage: String? = null
+    val configSaveMessage: String? = null,
+    val isBatteryOptimizationIgnored: Boolean = false,
+    val showBatteryOptimizationPrompt: Boolean = false
 )

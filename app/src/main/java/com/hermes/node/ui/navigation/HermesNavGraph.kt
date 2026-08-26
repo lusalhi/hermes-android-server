@@ -54,7 +54,8 @@ fun HermesApp(
                     bootstrapExtractor = extractor,
                     configRepository = configRepository,
                     configSerializer = configSerializer,
-                    serviceRunningFlow = HermesServerService.isRunning
+                    serviceRunningFlow = HermesServerService.isRunning,
+                    processStateFlow = HermesServerService.processState
                 ) as T
             }
         }
@@ -112,7 +113,9 @@ fun HermesApp(
                     state = uiState,
                     onToggleServer = viewModel::onToggleServer,
                     onRetryBootstrap = viewModel::triggerBootstrap,
-                    onRepairRuntime = viewModel::onRepairRuntime
+                    onRepairRuntime = viewModel::onRepairRuntime,
+                    onRequestBatteryExemption = { viewModel.onRequestBatteryExemption(context) },
+                    onDismissBatteryPrompt = viewModel::onDismissBatteryOptimizationPrompt
                 )
             }
             composable(Screen.Logs.route) {
@@ -132,7 +135,9 @@ fun HermesApp(
                     onUpdateAutoStart = viewModel::onUpdateAutoStart,
                     onUpdatePublicTunnel = viewModel::onUpdatePublicTunnel,
                     onSaveSettings = viewModel::onSaveSettings,
-                    onDismissSaveMessage = viewModel::onDismissSaveMessage
+                    onDismissSaveMessage = viewModel::onDismissSaveMessage,
+                    onRequestBatteryExemption = { viewModel.onRequestBatteryExemption(context) },
+                    oemGuidanceUrl = viewModel.getDontKillMyAppUrl()
                 )
             }
         }

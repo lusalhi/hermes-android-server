@@ -94,8 +94,10 @@ data class ProcessConfig(
                     hermesBin,
                     "gateway", "run"
                 )
-            } else {
+            } else if (File(hermesBin).exists()) {
                 listOf("gateway", "run")
+            } else {
+                listOf("-m", "hermes", "gateway", "run")
             }
 
             return ProcessConfig(
@@ -150,6 +152,7 @@ interface ProcessControllerInterface {
     suspend fun waitForExit(): Int?
     fun addExitListener(listener: (Int) -> Unit)
     fun removeExitListener(listener: (Int) -> Unit)
+    fun close() {}
 }
 
 /**
@@ -208,7 +211,7 @@ open class ProcessController(
 
     override suspend fun start(config: ProcessConfig): Result<Long> = withContext(ioDispatcher) {
         val currentState = _state.value
-        if (currentState == ProcessState.RUNNING || currentState == ProcessState.STARTING) {
+        if (currentState == ProcessState.RUNNING || currentState == ProcessState.STARTING || currentState == ProcessState.STOPPING) {
             return@withContext Result.failure(
                 IllegalStateException("Process is already in state: $currentState")
             )
@@ -347,16 +350,19 @@ open class ProcessController(
         exitListeners.remove(listener)
     }
 
-    private suspend fun waitForProcessTermination(process: Process, timeoutMs: Long): Boolean {
-        if (!process.isAlive) return true
-        val startTime = System.currentTimeMillis()
-        while (System.currentTimeMillis() - startTime < timeoutMs) {
-            if (!process.isAlive) {
-                return true
-            }
-            delay(50)
+    override fun close() {
+        watcherJob?.cancel()
+        watcherJob = null
+        closeStreams()
+    }
+
+    private suspend fun waitForProcessTermination(process: Process, timeoutMs: Long): Boolean = withContext(ioDispatcher) {
+        if (!process.isAlive) return@withContext true
+        try {
+            process.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: Throwable) {
+            !process.isAlive
         }
-        return !process.isAlive
     }
 
     private fun handleProcessExit(code: Int) {

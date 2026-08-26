@@ -67,6 +67,18 @@ context: []
 - [x] `app/src/test/java/com/hermes/node/service/HermesServerServiceTest.kt` -- Update service unit tests to verify `ProcessController` coordination and signal dispatching.
 - [x] `app/src/test/java/com/hermes/node/viewmodel/ServerViewModelTest.kt` -- Update ViewModel tests for process lifecycle integration.
 
+### Review Findings
+- [x] [Review][Patch] Eliminate Main UI Thread Blocking via Synchronous runBlocking in Service Lifecycle [app/src/main/java/com/hermes/node/service/HermesServerService.kt:109]
+- [x] [Review][Patch] Fix Test Suite Infinite Hang in FakeProcess.waitFor() Blocking Loop [app/src/test/java/com/hermes/node/engine/ProcessControllerTest.kt:272]
+- [x] [Review][Patch] Wire Runtime UI and ViewModel with ProcessController and ProcessState Flow [app/src/main/java/com/hermes/node/ui/navigation/HermesNavGraph.kt:48]
+- [x] [Review][Patch] Fix Invalid Python Entry-Point Arguments in Non-PRoot Fallback Configuration [app/src/main/java/com/hermes/node/engine/ProcessController.kt:85]
+- [x] [Review][Patch] Replace Polling Loop in waitForProcessTermination with Coroutine withTimeoutOrNull [app/src/main/java/com/hermes/node/engine/ProcessController.kt:350]
+- [x] [Review][Patch] Add ProcessState.STOPPING Guard to ProcessController.start() [app/src/main/java/com/hermes/node/engine/ProcessController.kt:370]
+- [x] [Review][Patch] Fix Leaked / Duplicate Exit Listener Registration in HermesServerService [app/src/main/java/com/hermes/node/service/HermesServerService.kt:57]
+- [x] [Review][Patch] Normalize Executable Invocation Path Inside PRoot Chroot [app/src/main/java/com/hermes/node/engine/ProcessController.kt:94]
+- [x] [Review][Patch] Standardize stop() Call Invocation in HermesServerService.onDestroy() [app/src/main/java/com/hermes/node/service/HermesServerService.kt:95]
+- [x] [Review][Patch] Add Assertions for PRoot and Standalone Invocations in createHermesDaemonConfig Unit Tests [app/src/test/java/com/hermes/node/engine/ProcessControllerTest.kt:203]
+
 **Acceptance Criteria:**
 - Given a running Hermes daemon process, when the user taps STOP SERVER or service receives `ACTION_STOP`, then `ProcessController` sends `SIGTERM` to the process.
 - Given a process that does not terminate within 5 seconds of `SIGTERM`, when the 5-second timeout elapses, then a fallback `SIGKILL` is executed and WakeLock is released.
@@ -74,7 +86,7 @@ context: []
 
 ## Spec Change Log
 
-<!-- Append-only. Populated by step-04 during review loops. -->
+- **2026-08-26 (Code Review Loop 1)**: Resolved all 10 code review patch findings. Fixed `FakeProcess.waitFor()` blocking loop hang with CountDownLatch and timed wait, eliminated UI thread blocking in service lifecycle, wired `processStateFlow` into `HermesNavGraph` and `ServerViewModel`, added `STOPPING` state guard, fixed Python module fallback invocation arguments (`-m hermes`), and cleaned up service exit listeners. Verified with 100% pass on `./gradlew test` and `./gradlew assembleDebug`.
 
 ## Design Notes
 

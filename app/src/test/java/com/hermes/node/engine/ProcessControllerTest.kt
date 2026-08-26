@@ -67,6 +67,8 @@ class ProcessControllerTest {
         assertNotNull(controller.stderr)
         assertNotNull(controller.stdin)
         assertEquals(listOf("/bin/dummy", "arg1", "arg2"), fakeRunner.lastExecutedConfig?.fullCommand)
+
+        controller.stop()
     }
 
     @Test
@@ -83,6 +85,8 @@ class ProcessControllerTest {
         assertTrue(secondStart.isFailure)
         assertTrue(secondStart.exceptionOrNull() is IllegalStateException)
         assertEquals(ProcessState.RUNNING, controller.state.value)
+
+        controller.stop()
     }
 
     @Test
@@ -218,6 +222,7 @@ class ProcessControllerTest {
         assertTrue(config.environment.containsKey("PYTHONHOME"))
         assertTrue(config.environment.containsKey("HERMES_CONFIG_PATH"))
         assertTrue(config.fullCommand.isNotEmpty())
+        assertEquals(listOf("-m", "hermes", "gateway", "run"), config.arguments)
 
         tempDir.deleteRecursively()
     }
@@ -261,6 +266,7 @@ class ProcessControllerTest {
         var ignoreSigterm: Boolean = false
     ) : Process() {
         private var _isAlive = true
+        private val exitLatch = java.util.concurrent.CountDownLatch(1)
         var destroyCalled = false
         var destroyForciblyCalled = false
 
@@ -269,10 +275,21 @@ class ProcessControllerTest {
         override fun getErrorStream(): InputStream = errStream
 
         override fun waitFor(): Int {
-            while (_isAlive) {
-                Thread.sleep(10)
+            try {
+                exitLatch.await()
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
             }
             return exitCodeValue
+        }
+
+        override fun waitFor(timeout: Long, unit: java.util.concurrent.TimeUnit): Boolean {
+            return try {
+                exitLatch.await(timeout, unit)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                !_isAlive
+            }
         }
 
         override fun exitValue(): Int {
@@ -284,18 +301,21 @@ class ProcessControllerTest {
             destroyCalled = true
             if (!ignoreSigterm) {
                 _isAlive = false
+                exitLatch.countDown()
             }
         }
 
         override fun destroyForcibly(): Process {
             destroyForciblyCalled = true
             _isAlive = false
+            exitLatch.countDown()
             return this
         }
 
         fun simulateUnexpectedExit(code: Int) {
             exitCodeValue = code
             _isAlive = false
+            exitLatch.countDown()
         }
 
         fun pid(): Long = fakePid

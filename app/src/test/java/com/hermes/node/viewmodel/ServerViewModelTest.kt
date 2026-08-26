@@ -1,5 +1,6 @@
 package com.hermes.node.viewmodel
 
+import android.content.Intent
 import com.hermes.node.data.ConfigRepository
 import com.hermes.node.data.ConfigSerializer
 import com.hermes.node.data.EncryptedConfigRepository
@@ -1003,6 +1004,214 @@ class ServerViewModelTest {
         assertTrue(state.errorMessage?.contains("Sub-process execution failed") == true)
 
         vm.stopMonitoring()
+    }
+
+    @Test
+    fun batteryOptimization_initialState_defaults() {
+        val state = viewModel.uiState.value
+        assertFalse(state.isBatteryOptimizationIgnored)
+        assertFalse(state.showBatteryOptimizationPrompt)
+    }
+
+    @Test
+    fun checkBatteryOptimizationStatus_whenIgnoring_updatesStateToIgnored() {
+        val fakeHelper = FakeBatteryOptimizationHelper(isIgnored = true)
+        val dummyContext = android.content.ContextWrapper(null)
+        val vm = ServerViewModel(
+            context = dummyContext,
+            batteryOptimizationHelper = fakeHelper,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        val state = vm.uiState.value
+        assertTrue(state.isBatteryOptimizationIgnored)
+        assertFalse(state.showBatteryOptimizationPrompt)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun checkBatteryOptimizationStatus_whenNotIgnoringAndAutoStartEnabled_showsPrompt() {
+        val fakeHelper = FakeBatteryOptimizationHelper(isIgnored = false)
+        val dummyContext = android.content.ContextWrapper(null)
+        val vm = ServerViewModel(
+            context = dummyContext,
+            batteryOptimizationHelper = fakeHelper,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertFalse(vm.uiState.value.isBatteryOptimizationIgnored)
+        assertFalse(vm.uiState.value.showBatteryOptimizationPrompt)
+
+        vm.onUpdateAutoStart(true)
+        assertTrue(vm.uiState.value.isAutoStartEnabled)
+        assertTrue(vm.uiState.value.showBatteryOptimizationPrompt)
+
+        // Toggling auto-start to false when STOPPED should reset prompt
+        vm.onUpdateAutoStart(false)
+        assertFalse(vm.uiState.value.isAutoStartEnabled)
+        assertFalse(vm.uiState.value.showBatteryOptimizationPrompt)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onUpdateAutoStart_whenDisabledWhileRunning_keepsPromptTrue() = runTest(testDispatcher) {
+        val fakeHelper = FakeBatteryOptimizationHelper(isIgnored = false)
+        val dummyContext = android.content.ContextWrapper(null)
+        val vm = ServerViewModel(
+            context = dummyContext,
+            batteryOptimizationHelper = fakeHelper,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+        assertTrue(vm.uiState.value.showBatteryOptimizationPrompt)
+
+        // Disabling auto-start while server is RUNNING preserves warning prompt
+        vm.onUpdateAutoStart(false)
+        assertFalse(vm.uiState.value.isAutoStartEnabled)
+        assertTrue(vm.uiState.value.showBatteryOptimizationPrompt)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun checkBatteryOptimizationStatus_withActivityContext_refreshesState() {
+        val fakeHelper = FakeBatteryOptimizationHelper(isIgnored = false)
+        val dummyContext = android.content.ContextWrapper(null)
+        val activityContext = android.content.ContextWrapper(null)
+        val vm = ServerViewModel(
+            context = dummyContext,
+            batteryOptimizationHelper = fakeHelper,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertFalse(vm.uiState.value.isBatteryOptimizationIgnored)
+
+        // User returned from OS settings, now whitelisted
+        fakeHelper.isIgnored = true
+        vm.checkBatteryOptimizationStatus(activityContext)
+
+        assertTrue(vm.uiState.value.isBatteryOptimizationIgnored)
+        assertFalse(vm.uiState.value.showBatteryOptimizationPrompt)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onDismissBatteryOptimizationPrompt_resetsPromptFlag() {
+        val fakeHelper = FakeBatteryOptimizationHelper(isIgnored = false)
+        val dummyContext = android.content.ContextWrapper(null)
+        val vm = ServerViewModel(
+            context = dummyContext,
+            batteryOptimizationHelper = fakeHelper,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onUpdateAutoStart(true)
+        assertTrue(vm.uiState.value.showBatteryOptimizationPrompt)
+
+        vm.onDismissBatteryOptimizationPrompt()
+        assertFalse(vm.uiState.value.showBatteryOptimizationPrompt)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onRequestBatteryExemption_invokesHelper_andLogsAction() {
+        val fakeHelper = FakeBatteryOptimizationHelper(isIgnored = false, exemptionResult = true)
+        val dummyContext = android.content.ContextWrapper(null)
+        val vm = ServerViewModel(
+            context = dummyContext,
+            batteryOptimizationHelper = fakeHelper,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        val result = vm.onRequestBatteryExemption()
+        assertTrue(result)
+        assertEquals(1, fakeHelper.requestCalls)
+        assertTrue(vm.uiState.value.logs.any { it.message.contains("Requested battery optimization exemption") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onRequestBatteryExemption_whenHelperFails_logsWarning() {
+        val fakeHelper = FakeBatteryOptimizationHelper(isIgnored = false, exemptionResult = false)
+        val dummyContext = android.content.ContextWrapper(null)
+        val vm = ServerViewModel(
+            context = dummyContext,
+            batteryOptimizationHelper = fakeHelper,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        val result = vm.onRequestBatteryExemption()
+        assertFalse(result)
+        assertEquals(1, fakeHelper.requestCalls)
+        assertTrue(vm.uiState.value.logs.any { it.level == LogLevel.WARN && it.message.contains("Unable to open battery optimization settings") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onStartServer_whenBatteryNotIgnored_triggersPrompt() = runTest(testDispatcher) {
+        val fakeHelper = FakeBatteryOptimizationHelper(isIgnored = false)
+        val dummyContext = android.content.ContextWrapper(null)
+        val vm = ServerViewModel(
+            context = dummyContext,
+            batteryOptimizationHelper = fakeHelper,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertFalse(vm.uiState.value.showBatteryOptimizationPrompt)
+
+        vm.onStartServer()
+        advanceTimeBy(650)
+
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+        assertTrue(vm.uiState.value.showBatteryOptimizationPrompt)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun getDontKillMyAppUrl_returnsUrlFromHelper() {
+        val fakeHelper = FakeBatteryOptimizationHelper(isIgnored = true, oemUrl = "https://dontkillmyapp.com/samsung")
+        val vm = ServerViewModel(
+            batteryOptimizationHelper = fakeHelper,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertEquals("https://dontkillmyapp.com/samsung", vm.getDontKillMyAppUrl())
+        vm.stopMonitoring()
+    }
+
+    private class FakeBatteryOptimizationHelper(
+        var isIgnored: Boolean = false,
+        var exemptionResult: Boolean = true,
+        var oemUrl: String = "https://dontkillmyapp.com"
+    ) : com.hermes.node.service.BatteryOptimizationHelperInterface {
+        var requestCalls = 0
+
+        override fun isIgnoringBatteryOptimizations(context: android.content.Context): Boolean = isIgnored
+        override fun createRequestExemptionIntent(context: android.content.Context): Intent = Intent()
+        override fun createBatteryOptimizationSettingsIntent(): Intent = Intent()
+        override fun requestExemption(context: android.content.Context): Boolean {
+            requestCalls++
+            return exemptionResult
+        }
+        override fun getDontKillMyAppUrl(manufacturer: String?): String = oemUrl
     }
 
     private class FakeBootstrapExtractor(

@@ -12,6 +12,8 @@ import com.hermes.node.engine.BootstrapExtractor
 import com.hermes.node.engine.ExtractionResult
 import com.hermes.node.engine.HealthCheckResult
 import android.content.Context
+import com.hermes.node.service.BatteryOptimizationHelper
+import com.hermes.node.service.BatteryOptimizationHelperInterface
 import com.hermes.node.service.HermesServerService
 import com.hermes.node.engine.ProcessControllerInterface
 import com.hermes.node.engine.ProcessState
@@ -37,7 +39,8 @@ class ServerViewModel(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val serviceRunningFlow: StateFlow<Boolean>? = null,
     private val startServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.start(ctx) },
-    private val stopServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.stop(ctx) }
+    private val stopServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.stop(ctx) },
+    private val batteryOptimizationHelper: BatteryOptimizationHelperInterface? = BatteryOptimizationHelper()
 ) : ViewModel() {
 
     private val context: Context? = context?.applicationContext ?: context
@@ -54,6 +57,7 @@ class ServerViewModel(
 
     init {
         loadPersistedConfig()
+        checkBatteryOptimizationStatus()
         // Initial welcome log
         onAddLog("Hermes Node initialized. Ready to start.", LogLevel.INFO)
         checkAndInitializeBootstrap()
@@ -374,16 +378,20 @@ class ServerViewModel(
             }
         }
 
+        checkBatteryOptimizationStatus()
+
         transitionJob = viewModelScope.launch {
             delay(600) // Brief startup transition
 
             _uiState.update {
+                val shouldPrompt = !it.isBatteryOptimizationIgnored
                 it.copy(
                     status = ServerStatus.RUNNING,
                     uptimeSeconds = 0L,
                     cpuUsagePercent = 2.4f,
                     memoryUsageMb = 85L,
-                    tunnelUrl = if (it.isPublicTunnelEnabled) "https://hermes-node.trycloudflare.com" else null
+                    tunnelUrl = if (it.isPublicTunnelEnabled) "https://hermes-node.trycloudflare.com" else null,
+                    showBatteryOptimizationPrompt = if (shouldPrompt) true else it.showBatteryOptimizationPrompt
                 )
             }
             onAddLog("Hermes Node daemon running on port 8000", LogLevel.INFO)
@@ -447,14 +455,17 @@ class ServerViewModel(
         try {
             val config = repo.getConfig()
             _uiState.update { current ->
+                val autoStart = config.system.autoStartOnBoot
+                val shouldPrompt = autoStart && !current.isBatteryOptimizationIgnored
                 current.copy(
                     selectedProvider = config.provider.provider.ifEmpty { current.selectedProvider },
                     apiKey = config.provider.apiKey,
                     telegramToken = config.gateway.telegramToken,
                     customModel = config.provider.model,
                     customBaseUrl = config.provider.baseUrl,
-                    isAutoStartEnabled = config.system.autoStartOnBoot,
-                    isPublicTunnelEnabled = config.system.publicTunnelEnabled
+                    isAutoStartEnabled = autoStart,
+                    isPublicTunnelEnabled = config.system.publicTunnelEnabled,
+                    showBatteryOptimizationPrompt = if (shouldPrompt) true else current.showBatteryOptimizationPrompt
                 )
             }
             if (config.provider.apiKey.isNotBlank() || config.gateway.telegramToken.isNotBlank()) {
@@ -580,7 +591,47 @@ class ServerViewModel(
     }
 
     fun onUpdateAutoStart(enabled: Boolean) {
-        _uiState.update { it.copy(isAutoStartEnabled = enabled, isSettingsSaved = false, configSaveMessage = null) }
+        _uiState.update { current ->
+            val shouldPrompt = !current.isBatteryOptimizationIgnored && (enabled || current.status == ServerStatus.RUNNING)
+            current.copy(
+                isAutoStartEnabled = enabled,
+                isSettingsSaved = false,
+                configSaveMessage = null,
+                showBatteryOptimizationPrompt = shouldPrompt
+            )
+        }
+    }
+
+    fun checkBatteryOptimizationStatus(activityContext: Context? = null) {
+        val helper = batteryOptimizationHelper ?: return
+        val targetCtx = activityContext ?: context ?: return
+        val isIgnored = helper.isIgnoringBatteryOptimizations(targetCtx)
+        _uiState.update { current ->
+            current.copy(
+                isBatteryOptimizationIgnored = isIgnored,
+                showBatteryOptimizationPrompt = !isIgnored && (current.isAutoStartEnabled || current.status == ServerStatus.RUNNING)
+            )
+        }
+    }
+
+    fun onRequestBatteryExemption(activityContext: Context? = null): Boolean {
+        val helper = batteryOptimizationHelper ?: return false
+        val targetCtx = activityContext ?: context ?: return false
+        val result = helper.requestExemption(targetCtx)
+        if (result) {
+            onAddLog("Requested battery optimization exemption from Android OS.", LogLevel.INFO)
+        } else {
+            onAddLog("Unable to open battery optimization settings.", LogLevel.WARN)
+        }
+        return result
+    }
+
+    fun onDismissBatteryOptimizationPrompt() {
+        _uiState.update { it.copy(showBatteryOptimizationPrompt = false) }
+    }
+
+    fun getDontKillMyAppUrl(): String {
+        return batteryOptimizationHelper?.getDontKillMyAppUrl() ?: "https://dontkillmyapp.com"
     }
 
     fun onUpdatePublicTunnel(enabled: Boolean) {

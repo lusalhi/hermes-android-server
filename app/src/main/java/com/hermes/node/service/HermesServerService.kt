@@ -12,12 +12,17 @@ import androidx.core.app.ServiceCompat
 import com.hermes.node.engine.ProcessConfig
 import com.hermes.node.engine.ProcessController
 import com.hermes.node.engine.ProcessControllerInterface
+import com.hermes.node.engine.ProcessState
 import com.hermes.node.engine.ProcessStopResult
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
 
@@ -26,6 +31,8 @@ open class HermesServerService : Service() {
     var wakeLockManager: WakeLockManagerInterface? = null
     var processController: ProcessControllerInterface? = null
     internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private var serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var processExitListener: ((Int) -> Unit)? = null
 
     private val safeFilesDir: File
         get() = try {
@@ -55,11 +62,23 @@ open class HermesServerService : Service() {
     }
 
     fun setupProcessExitListener() {
-        processController?.addExitListener { exitCode ->
+        processExitListener?.let { processController?.removeExitListener(it) }
+        val listener: (Int) -> Unit = { exitCode ->
+            _processState.value = ProcessState.TERMINATED
             try {
                 Log.w(TAG, "Sub-process terminated with exit code: $exitCode. Cleaning up service state...")
             } catch (ignored: Throwable) {}
             onProcessTerminatedUnexpectedly(exitCode)
+        }
+        processExitListener = listener
+        processController?.addExitListener(listener)
+
+        processController?.let { controller ->
+            serviceScope.launch {
+                controller.state.collect { pState ->
+                    _processState.value = pState
+                }
+            }
         }
     }
 
@@ -74,6 +93,7 @@ open class HermesServerService : Service() {
             } catch (ignored: Throwable) {}
         }
         _isRunning.value = false
+        _processState.value = ProcessState.TERMINATED
         try {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         } catch (ignored: Throwable) {}
@@ -104,8 +124,10 @@ open class HermesServerService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        processExitListener?.let { processController?.removeExitListener(it) }
+        processExitListener = null
         try {
-            if (processController?.isAlive == true) {
+            if (processController != null) {
                 runBlocking(ioDispatcher) {
                     processController?.stop()
                 }
@@ -125,6 +147,10 @@ open class HermesServerService : Service() {
             } catch (ignored: Throwable) {}
         }
         _isRunning.value = false
+        _processState.value = ProcessState.STOPPED
+        try {
+            serviceScope.cancel()
+        } catch (ignored: Throwable) {}
         try {
             NotificationHelper.cancelNotification(this)
         } catch (ignored: Throwable) {}
@@ -200,6 +226,7 @@ open class HermesServerService : Service() {
                     }
                 } catch (ignored: Throwable) {}
                 _isRunning.value = false
+                _processState.value = ProcessState.ERROR
                 try {
                     ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 } catch (ignored: Throwable) {}
@@ -208,6 +235,8 @@ open class HermesServerService : Service() {
                 } catch (ignored: Throwable) {}
                 stopSelfService()
                 return false
+            } else {
+                _processState.value = ProcessState.RUNNING
             }
         }
 
@@ -236,6 +265,7 @@ open class HermesServerService : Service() {
         }
 
         _isRunning.value = false
+        _processState.value = ProcessState.STOPPED
 
         try {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -270,6 +300,9 @@ open class HermesServerService : Service() {
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+
+        private val _processState = MutableStateFlow(com.hermes.node.engine.ProcessState.STOPPED)
+        val processState: StateFlow<com.hermes.node.engine.ProcessState> = _processState.asStateFlow()
 
         fun start(context: Context): Boolean {
             val intent = Intent(context, HermesServerService::class.java).apply {
@@ -307,6 +340,10 @@ open class HermesServerService : Service() {
 
         internal fun setRunningForTest(running: Boolean) {
             _isRunning.value = running
+        }
+
+        internal fun setProcessStateForTest(state: com.hermes.node.engine.ProcessState) {
+            _processState.value = state
         }
     }
 }
