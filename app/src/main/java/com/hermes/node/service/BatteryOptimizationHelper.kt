@@ -132,7 +132,7 @@ open class BatteryOptimizationHelper : BatteryOptimizationHelperInterface {
             return DONT_KILL_MY_APP_BASE
         }
         val matchedPath = KNOWN_OEM_PATHS.firstOrNull { (key, _) ->
-            normalized == key || normalized.contains(key) || key.contains(normalized)
+            normalized == key || normalized.contains(key)
         }?.second
 
         return if (matchedPath != null) {

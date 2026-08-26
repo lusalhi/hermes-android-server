@@ -32,11 +32,13 @@ class HermesServerServiceTest {
         fakeWakeLock = FakeWakeLockManager()
         fakeProcessController = FakeProcessController()
         HermesServerService.setRunningForTest(false)
+        HermesServerService.setProcessStateForTest(ProcessState.STOPPED)
     }
 
     @After
     fun tearDown() {
         HermesServerService.setRunningForTest(false)
+        HermesServerService.setProcessStateForTest(ProcessState.STOPPED)
     }
 
     @Test
@@ -44,6 +46,7 @@ class HermesServerServiceTest {
         assertEquals("com.hermes.node.action.START", HermesServerService.ACTION_START)
         assertEquals("com.hermes.node.action.STOP", HermesServerService.ACTION_STOP)
         assertFalse(HermesServerService.isRunning.value)
+        assertEquals(ProcessState.STOPPED, HermesServerService.processState.value)
     }
 
     @Test
@@ -56,10 +59,20 @@ class HermesServerServiceTest {
     }
 
     @Test
+    fun setProcessStateForTest_updatesStateFlow() {
+        assertEquals(ProcessState.STOPPED, HermesServerService.processState.value)
+        HermesServerService.setProcessStateForTest(ProcessState.RUNNING)
+        assertEquals(ProcessState.RUNNING, HermesServerService.processState.value)
+        HermesServerService.setProcessStateForTest(ProcessState.STOPPED)
+        assertEquals(ProcessState.STOPPED, HermesServerService.processState.value)
+    }
+
+    @Test
     fun startAndStop_managesWakeLockAndProcessController() {
         val service = TestableHermesServerService(fakeWakeLock, fakeProcessController)
 
         assertFalse(HermesServerService.isRunning.value)
+        assertEquals(ProcessState.STOPPED, HermesServerService.processState.value)
         assertFalse(fakeWakeLock.isHeld)
         assertEquals(0, fakeProcessController.startCalls)
 
@@ -67,6 +80,7 @@ class HermesServerServiceTest {
         assertTrue(startResult)
 
         assertTrue(HermesServerService.isRunning.value)
+        assertEquals(ProcessState.RUNNING, HermesServerService.processState.value)
         assertTrue(fakeWakeLock.isHeld)
         assertEquals(1, fakeWakeLock.acquireCalls)
         assertEquals(1, fakeProcessController.startCalls)
@@ -82,6 +96,7 @@ class HermesServerServiceTest {
 
         assertEquals(ProcessStopResult.GRACEFUL_SIGTERM, stopResult)
         assertFalse(HermesServerService.isRunning.value)
+        assertEquals(ProcessState.STOPPED, HermesServerService.processState.value)
         assertFalse(fakeWakeLock.isHeld)
         assertEquals(1, fakeWakeLock.releaseCalls)
         assertEquals(1, fakeProcessController.stopCalls)
@@ -98,6 +113,7 @@ class HermesServerServiceTest {
         assertFalse(startResult)
 
         assertFalse(HermesServerService.isRunning.value)
+        assertEquals(ProcessState.ERROR, HermesServerService.processState.value)
         assertFalse(fakeWakeLock.isHeld)
         assertTrue(service.stopSelfCalled)
     }
@@ -169,6 +185,7 @@ class HermesServerServiceTest {
 
         assertFalse(fakeWakeLock.isHeld)
         assertFalse(HermesServerService.isRunning.value)
+        assertEquals(ProcessState.TERMINATED, HermesServerService.processState.value)
         assertTrue(service.stopSelfCalled)
     }
 
@@ -184,6 +201,7 @@ class HermesServerServiceTest {
 
         assertFalse(fakeWakeLock.isHeld)
         assertFalse(HermesServerService.isRunning.value)
+        assertEquals(ProcessState.STOPPED, HermesServerService.processState.value)
         assertEquals(1, fakeWakeLock.releaseCalls)
         assertEquals(1, fakeProcessController.stopCalls)
     }

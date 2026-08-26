@@ -101,14 +101,14 @@ class BootReceiverTest {
     }
 
     @Test
-    fun onReceive_lockedBootCompleted_whenAutoStartEnabled_startsService() {
+    fun onReceive_lockedBootCompleted_doesNotStartService() {
         fakeConfigRepository.autoStart = true
         bootReceiver.testAction = "android.intent.action.LOCKED_BOOT_COMPLETED"
         val intent = Intent()
 
         bootReceiver.onReceive(mockContext, intent)
 
-        assertEquals(1, serviceStarterCalls)
+        assertEquals(0, serviceStarterCalls)
     }
 
     @Test

@@ -607,9 +607,17 @@ class ServerViewModel(
         val targetCtx = activityContext ?: context ?: return
         val isIgnored = helper.isIgnoringBatteryOptimizations(targetCtx)
         _uiState.update { current ->
+            val wasIgnored = current.isBatteryOptimizationIgnored
+            val shouldPrompt = if (isIgnored) {
+                false
+            } else if (wasIgnored != isIgnored) {
+                current.isAutoStartEnabled || current.status == ServerStatus.RUNNING
+            } else {
+                current.showBatteryOptimizationPrompt
+            }
             current.copy(
                 isBatteryOptimizationIgnored = isIgnored,
-                showBatteryOptimizationPrompt = !isIgnored && (current.isAutoStartEnabled || current.status == ServerStatus.RUNNING)
+                showBatteryOptimizationPrompt = shouldPrompt
             )
         }
     }

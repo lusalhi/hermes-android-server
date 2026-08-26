@@ -17,6 +17,7 @@ import com.hermes.node.engine.ProcessStopResult
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +34,7 @@ open class HermesServerService : Service() {
     internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
     private var serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var processExitListener: ((Int) -> Unit)? = null
+    private var processStateCollectorJob: Job? = null
 
     private val safeFilesDir: File
         get() = try {
@@ -73,8 +75,9 @@ open class HermesServerService : Service() {
         processExitListener = listener
         processController?.addExitListener(listener)
 
+        processStateCollectorJob?.cancel()
         processController?.let { controller ->
-            serviceScope.launch {
+            processStateCollectorJob = serviceScope.launch {
                 controller.state.collect { pState ->
                     _processState.value = pState
                 }
@@ -126,10 +129,13 @@ open class HermesServerService : Service() {
     override fun onDestroy() {
         processExitListener?.let { processController?.removeExitListener(it) }
         processExitListener = null
+        processStateCollectorJob?.cancel()
+        processStateCollectorJob = null
         try {
             if (processController != null) {
                 runBlocking(ioDispatcher) {
-                    processController?.stop()
+                    processController?.stop(1500L)
+                    processController?.close()
                 }
             }
         } catch (e: Exception) {

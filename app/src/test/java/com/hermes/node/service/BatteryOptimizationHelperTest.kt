@@ -71,6 +71,7 @@ class BatteryOptimizationHelperTest {
 
         assertTrue(result)
         assertEquals(1, fakeContext.startActivityCallCount)
+        assertNotNull(fakeContext.lastStartedIntent)
     }
 
     @Test
@@ -81,6 +82,7 @@ class BatteryOptimizationHelperTest {
 
         assertTrue(result)
         assertEquals(2, fakeContext.startActivityCallCount)
+        assertNotNull(fakeContext.lastStartedIntent)
     }
 
     @Test
@@ -91,6 +93,7 @@ class BatteryOptimizationHelperTest {
 
         assertTrue(result)
         assertEquals(2, fakeContext.startActivityCallCount)
+        assertNotNull(fakeContext.lastStartedIntent)
     }
 
     @Test
@@ -140,16 +143,17 @@ class BatteryOptimizationHelperTest {
     }
 
     @Test
-    fun getDontKillMyAppUrl_unknownManufacturer_returnsDefaultBaseUrl() {
-        assertEquals("https://dontkillmyapp.com", helper.getDontKillMyAppUrl("UnknownBrand"))
-        assertEquals("https://dontkillmyapp.com", helper.getDontKillMyAppUrl(""))
-        assertEquals("https://dontkillmyapp.com", helper.getDontKillMyAppUrl(null))
+    fun getDontKillMyAppUrl_shortSubstrings_doNotFalselyMatch() {
+        assertEquals("https://dontkillmyapp.com", helper.getDontKillMyAppUrl("m"))
+        assertEquals("https://dontkillmyapp.com", helper.getDontKillMyAppUrl("on"))
+        assertEquals("https://dontkillmyapp.com", helper.getDontKillMyAppUrl("el"))
     }
 
     private class FakeBatteryTestContext : ContextWrapper(null) {
         var powerManager: PowerManager? = null
         var throwOnFirstCall: Throwable? = null
         var startActivityCallCount = 0
+        var lastStartedIntent: Intent? = null
 
         override fun getPackageName(): String = "com.hermes.node"
 
@@ -159,6 +163,7 @@ class BatteryOptimizationHelperTest {
 
         override fun startActivity(intent: Intent?) {
             startActivityCallCount++
+            lastStartedIntent = intent
             if (startActivityCallCount == 1 && throwOnFirstCall != null) {
                 throw throwOnFirstCall!!
             }

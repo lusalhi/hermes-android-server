@@ -164,13 +164,13 @@ fun DashboardScreen(
                         if (onDismissBatteryPrompt != null) {
                             IconButton(
                                 onClick = onDismissBatteryPrompt,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(40.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Dismiss Banner",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }

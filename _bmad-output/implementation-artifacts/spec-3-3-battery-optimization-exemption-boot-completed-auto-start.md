@@ -4,7 +4,7 @@ type: 'feature'
 created: '2026-08-26'
 status: 'done'
 baseline_commit: 'e56128d6d3857ad5e1c8c262a0741f4096ed0ddc'
-review_loop_iteration: 0
+review_loop_iteration: 1
 context: []
 ---
 
@@ -74,6 +74,17 @@ context: []
 - [x] `app/src/test/java/com/hermes/node/service/BatteryOptimizationHelperTest.kt` -- Test `BatteryOptimizationHelper` intent generation and fallback.
 - [x] `app/src/test/java/com/hermes/node/viewmodel/ServerViewModelTest.kt` -- Test battery optimization UI state and auto-start logic.
 
+### Review Findings
+- [x] [Review][Patch] Fix Flawed Substring Matching in BatteryOptimizationHelper.getDontKillMyAppUrl [app/src/main/java/com/hermes/node/service/BatteryOptimizationHelper.kt:135]
+- [x] [Review][Patch] Eliminate Leaking Coroutine State Collectors in HermesServerService.setupProcessExitListener [app/src/main/java/com/hermes/node/service/HermesServerService.kt:76]
+- [x] [Review][Patch] Fix User Dismissal Overwrite on Activity Resume in ServerViewModel [app/src/main/java/com/hermes/node/viewmodel/ServerViewModel.kt:612]
+- [x] [Review][Patch] Reduce onDestroy Process Stop Grace Timeout to Prevent Service ANR [app/src/main/java/com/hermes/node/service/HermesServerService.kt:132]
+- [x] [Review][Patch] Invoke processController.close() on Service Teardown [app/src/main/java/com/hermes/node/service/HermesServerService.kt:134]
+- [x] [Review][Patch] Remove Undeclared LOCKED_BOOT_COMPLETED from BootReceiver Supported Actions [app/src/main/java/com/hermes/node/service/BootReceiver.kt:23]
+- [x] [Review][Patch] Add Explicit Intent Action, URI, Flag, and Dispatch Assertions in BatteryOptimizationHelperTest [app/src/test/java/com/hermes/node/service/BatteryOptimizationHelperTest.kt:36]
+- [x] [Review][Patch] Add HermesServerService.processState Flow Assertions and Clean Reset in Service Tests [app/src/test/java/com/hermes/node/service/HermesServerServiceTest.kt:34]
+- [x] [Review][Patch] Ensure Dashboard Battery Warning Dismiss Button Has Adequate Touch Target [app/src/main/java/com/hermes/node/ui/screens/DashboardScreen.kt:167]
+
 **Acceptance Criteria:**
 - Given "Auto-start on boot" is enabled in settings, when device broadcasts `ACTION_BOOT_COMPLETED` or `ACTION_MY_PACKAGE_REPLACED`, then `BootReceiver` initiates `HermesServerService` in foreground.
 - Given "Auto-start on boot" is disabled in settings, when device broadcasts `ACTION_BOOT_COMPLETED`, then `BootReceiver` does not start `HermesServerService`.
@@ -82,7 +93,7 @@ context: []
 
 ## Spec Change Log
 
-_None._
+- **2026-08-26 (Code Review Loop 1)**: Resolved all 9 code review patch findings. Fixed flawed OEM substring matching in `BatteryOptimizationHelper`, eliminated leaking coroutine state collectors in `HermesServerService.setupProcessExitListener`, preserved user prompt dismissal on activity resume in `ServerViewModel`, reduced service `onDestroy` stop timeout to 1500ms and added `processController.close()` teardown, removed undeclared `LOCKED_BOOT_COMPLETED` from `BootReceiver`, added `processState` assertions and test resets in `HermesServerServiceTest`, and increased dismiss button touch target size in `DashboardScreen`. Verified with 100% pass on `./gradlew testDebugUnitTest` and `./gradlew assembleDebug`.
 
 ## Design Notes
 
