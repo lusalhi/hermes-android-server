@@ -4,29 +4,25 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material3.Card
@@ -38,7 +34,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,13 +43,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.hermes.node.ui.components.LogExportHelper
+import com.hermes.node.ui.components.LogLineItem
 import com.hermes.node.ui.theme.DarkBorder
 import com.hermes.node.ui.theme.DarkSurface
 import com.hermes.node.ui.theme.HermesCyan
@@ -66,9 +63,6 @@ import com.hermes.node.ui.theme.MonospaceCodeStyle
 import com.hermes.node.ui.theme.TerminalBackground
 import com.hermes.node.viewmodel.LogEntry
 import com.hermes.node.viewmodel.LogLevel
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @Composable
 fun LogsScreen(
@@ -81,18 +75,19 @@ fun LogsScreen(
     var isAutoScroll by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
 
     val filteredLogs = remember(logs, searchQuery, selectedLevel) {
-        logs.filter { entry ->
-            val matchesQuery = searchQuery.isBlank() || entry.message.contains(searchQuery, ignoreCase = true)
-            val matchesLevel = selectedLevel == null || entry.level == selectedLevel
-            matchesQuery && matchesLevel
-        }
+        LogExportHelper.filterLogs(
+            logs = logs,
+            searchQuery = searchQuery,
+            selectedLevel = selectedLevel
+        )
     }
 
-    LaunchedEffect(filteredLogs.size, isAutoScroll) {
+    LaunchedEffect(filteredLogs.lastOrNull()?.timestamp ?: 0L, filteredLogs.size, isAutoScroll) {
         if (isAutoScroll && filteredLogs.isNotEmpty()) {
-            listState.animateScrollToItem(filteredLogs.size - 1)
+            listState.scrollToItem(filteredLogs.size - 1)
         }
     }
 
@@ -129,22 +124,23 @@ fun LogsScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.VerticalAlignBottom,
-                        contentDescription = "Toggle Auto-scroll",
+                        contentDescription = if (isAutoScroll) "Disable auto-scroll" else "Enable auto-scroll",
                         tint = if (isAutoScroll) HermesCyan else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                // Copy all logs
+                // Copy logs (filtered if filter active, all if no filter)
                 IconButton(
                     onClick = {
-                        if (logs.isNotEmpty()) {
-                            val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
-                            val text = logs.joinToString("\n") {
-                                "[${timeFormat.format(Date(it.timestamp))}] [${it.level.name}] ${it.message}"
-                            }
+                        if (filteredLogs.isNotEmpty()) {
+                            val text = LogExportHelper.formatLogsForExport(filteredLogs)
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                             clipboard.setPrimaryClip(ClipData.newPlainText("Hermes Logs", text))
-                            Toast.makeText(context, "Copied logs to clipboard", Toast.LENGTH_SHORT).show()
+                            val isFiltered = searchQuery.isNotBlank() || selectedLevel != null
+                            val toastMsg = LogExportHelper.getCopyFeedbackMessage(filteredLogs.size, isFiltered)
+                            Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "No logs to copy", Toast.LENGTH_SHORT).show()
                         }
                     }
                 ) {
@@ -194,6 +190,8 @@ fun LogsScreen(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedContainerColor = DarkSurface,
                 unfocusedContainerColor = DarkSurface,
@@ -202,9 +200,11 @@ fun LogsScreen(
             )
         )
 
-        // Filter chips (All, INFO, WARN, ERROR)
+        // Filter chips (All, INFO, WARN, ERROR, DEBUG) with horizontal scrolling
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             FilterChip(
@@ -243,7 +243,7 @@ fun LogsScreen(
                 .weight(1f),
             colors = CardDefaults.cardColors(containerColor = TerminalBackground),
             shape = RoundedCornerShape(12.dp),
-            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder))
+            border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(DarkBorder))
         ) {
             if (filteredLogs.isEmpty()) {
                 Box(
@@ -264,47 +264,14 @@ fun LogsScreen(
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(filteredLogs) { entry ->
+                    items(
+                        items = filteredLogs,
+                        key = { item -> "${item.timestamp}_${item.level}_${item.message.hashCode()}" }
+                    ) { entry ->
                         LogLineItem(entry = entry)
                     }
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun LogLineItem(entry: LogEntry) {
-    val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
-    val formattedTime = remember(entry.timestamp) { timeFormat.format(Date(entry.timestamp)) }
-
-    val levelColor = when (entry.level) {
-        LogLevel.INFO -> LogInfo
-        LogLevel.WARN -> LogWarn
-        LogLevel.ERROR -> LogError
-        LogLevel.DEBUG -> LogDebug
-    }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top
-    ) {
-        Text(
-            text = formattedTime,
-            style = MonospaceCodeStyle.copy(fontSize = 11.sp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-            text = "[${entry.level.name.padEnd(5)}]",
-            style = MonospaceCodeStyle.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
-            color = levelColor
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-            text = entry.message,
-            style = MonospaceCodeStyle,
-            color = MaterialTheme.colorScheme.onBackground
-        )
     }
 }
