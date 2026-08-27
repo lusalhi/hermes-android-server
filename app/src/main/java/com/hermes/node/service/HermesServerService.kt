@@ -63,7 +63,7 @@ open class HermesServerService : Service() {
             processController = ProcessController(filesDir = safeFilesDir)
         }
         if (logStreamer == null) {
-            logStreamer = LogStreamer(ioDispatcher = ioDispatcher)
+            logStreamer = sharedLogStreamer
         }
         setupProcessExitListener()
         NotificationHelper.createNotificationChannel(this)
@@ -93,17 +93,17 @@ open class HermesServerService : Service() {
 
     internal open fun onProcessTerminatedUnexpectedly(exitCode: Int) {
         try {
-            logStreamer?.stop()
-        } catch (ignored: Throwable) {}
-        try {
             if (wakeLockManager?.isHeld == true) {
                 wakeLockManager?.release()
             }
         } catch (e: Exception) {
             try {
-                Log.w(TAG, "Error releasing WakeLock on unexpected termination: ${e.message}")
+                Log.w(TAG, "Error releasing WakeLock on unexpected exit: ${e.message}")
             } catch (ignored: Throwable) {}
         }
+        try {
+            logStreamer?.stop()
+        } catch (ignored: Throwable) {}
         _isRunning.value = false
         _processState.value = ProcessState.TERMINATED
         try {
@@ -269,14 +269,15 @@ open class HermesServerService : Service() {
     }
 
     fun stopForegroundServiceInternal(): ProcessStopResult {
-        try {
-            logStreamer?.stop()
-        } catch (ignored: Throwable) {}
         val stopResult = processController?.let { controller ->
             runBlocking(ioDispatcher) {
                 controller.stop()
             }
         } ?: ProcessStopResult.ALREADY_STOPPED
+
+        try {
+            logStreamer?.stop()
+        } catch (ignored: Throwable) {}
 
         try {
             if (wakeLockManager?.isHeld == true) {
@@ -321,6 +322,8 @@ open class HermesServerService : Service() {
         const val TAG = "HermesServerService"
         const val ACTION_START = NotificationHelper.ACTION_START
         const val ACTION_STOP = NotificationHelper.ACTION_STOP
+
+        val sharedLogStreamer: LogStreamerInterface = LogStreamer()
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()

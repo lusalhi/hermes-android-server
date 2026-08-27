@@ -7,8 +7,10 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,7 +56,10 @@ open class LogStreamer(
     private var streamerScope: CoroutineScope? = null
     private var stdoutJob: Job? = null
     private var stderrJob: Job? = null
+    private var stdoutStream: InputStream? = null
+    private var stderrStream: InputStream? = null
 
+    @Volatile
     private var _isStreaming = false
     override val isStreaming: Boolean
         get() = _isStreaming
@@ -63,6 +68,12 @@ open class LogStreamer(
     override fun start(stdout: InputStream?, stderr: InputStream?) {
         stop()
 
+        if (stdout == null && stderr == null) {
+            return
+        }
+
+        stdoutStream = stdout
+        stderrStream = stderr
         val scope = CoroutineScope(ioDispatcher + SupervisorJob())
         streamerScope = scope
         _isStreaming = true
@@ -87,6 +98,14 @@ open class LogStreamer(
         stdoutJob = null
         stderrJob?.cancel()
         stderrJob = null
+        try {
+            stdoutStream?.close()
+        } catch (ignored: Throwable) {}
+        stdoutStream = null
+        try {
+            stderrStream?.close()
+        } catch (ignored: Throwable) {}
+        stderrStream = null
         try {
             streamerScope?.cancel()
         } catch (ignored: Throwable) {}
@@ -122,13 +141,11 @@ open class LogStreamer(
         val reader = BufferedReader(InputStreamReader(stream, decoder))
 
         try {
-            while (withContext(ioDispatcher) { streamerScope?.isActive == true }) {
-                val line = withContext(ioDispatcher) {
-                    try {
-                        reader.readLine()
-                    } catch (e: IOException) {
-                        null
-                    }
+            while (currentCoroutineContext().isActive) {
+                val line = try {
+                    reader.readLine()
+                } catch (e: IOException) {
+                    null
                 } ?: break // EOF reached
 
                 val cleanedMessage = stripAnsi(line)
@@ -144,7 +161,7 @@ open class LogStreamer(
             // Catch-all to prevent unhandled exceptions
         } finally {
             try {
-                withContext(ioDispatcher) {
+                withContext(NonCancellable + ioDispatcher) {
                     reader.close()
                 }
             } catch (ignored: Throwable) {}
@@ -152,7 +169,7 @@ open class LogStreamer(
     }
 
     companion object {
-        private val ANSI_REGEX = Regex("\u001B\\[[;\\d]*[ -/]*[@-~]")
+        private val ANSI_REGEX = Regex("\u001B\\[[0-9;?]*[ -/]*[@-~]")
 
         /**
          * Strips ANSI escape sequences from the string.
@@ -168,26 +185,28 @@ open class LogStreamer(
          * - ERROR: contains [ERROR], ERROR:, FATAL, Exception, Traceback, Error: or unformatted stderr
          * - WARN: contains [WARN], [WARNING], WARNING:, WARN:
          * - DEBUG: contains [DEBUG], DEBUG:
-         * - INFO: contains [INFO] or default for stdout
+         * - INFO: contains [INFO], INFO: or default for stdout
          */
         fun parseLogLevel(line: String, isStderr: Boolean = false): LogLevel {
+            val upper = line.uppercase()
             return when {
-                line.contains("[ERROR]") ||
-                line.contains("ERROR:") ||
-                line.contains("FATAL") ||
-                line.contains("Exception") ||
-                line.contains("Traceback") ||
-                line.contains("Error:") -> LogLevel.ERROR
+                upper.contains("[ERROR]") ||
+                upper.contains("ERROR:") ||
+                upper.contains("FATAL") ||
+                upper.contains("EXCEPTION") ||
+                upper.contains("TRACEBACK") ||
+                upper.contains("ERROR: ") -> LogLevel.ERROR
 
-                line.contains("[WARN]") ||
-                line.contains("[WARNING]") ||
-                line.contains("WARNING:") ||
-                line.contains("WARN:") -> LogLevel.WARN
+                upper.contains("[WARN]") ||
+                upper.contains("[WARNING]") ||
+                upper.contains("WARNING:") ||
+                upper.contains("WARN:") -> LogLevel.WARN
 
-                line.contains("[DEBUG]") ||
-                line.contains("DEBUG:") -> LogLevel.DEBUG
+                upper.contains("[DEBUG]") ||
+                upper.contains("DEBUG:") -> LogLevel.DEBUG
 
-                line.contains("[INFO]") -> LogLevel.INFO
+                upper.contains("[INFO]") ||
+                upper.contains("INFO:") -> LogLevel.INFO
 
                 isStderr -> LogLevel.ERROR
 

@@ -55,7 +55,8 @@ fun HermesApp(
                     configRepository = configRepository,
                     configSerializer = configSerializer,
                     serviceRunningFlow = HermesServerService.isRunning,
-                    processStateFlow = HermesServerService.processState
+                    processStateFlow = HermesServerService.processState,
+                    logStreamer = HermesServerService.sharedLogStreamer
                 ) as T
             }
         }

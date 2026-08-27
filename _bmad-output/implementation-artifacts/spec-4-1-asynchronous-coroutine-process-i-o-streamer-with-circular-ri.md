@@ -71,6 +71,17 @@ context:
 - [x] `app/src/test/java/com/hermes/node/engine/RingBufferTest.kt` -- Implement comprehensive unit tests verifying bounded size, thread-safe concurrent access, and FIFO eviction.
 - [x] `app/src/test/java/com/hermes/node/engine/LogStreamerTest.kt` -- Implement unit tests for stream decoding, ANSI stripping, log level detection, coroutine cancellation, and error handling.
 
+### Review Findings
+
+- [x] [Review][Patch] Implement StateFlow conflation / throttled snapshot generation to avoid GC churn and UI recomposition flooding [`app/src/main/java/com/hermes/node/engine/LogStreamer.kt:103-106`](file:///home/ubuntu/hermes-android-server/app/src/main/java/com/hermes/node/engine/LogStreamer.kt#L103-L106)
+- [x] [Review][Patch] Wrap reader.close() in withContext(NonCancellable + ioDispatcher) within readStream finally block to prevent descriptor leak on cancellation [`app/src/main/java/com/hermes/node/engine/LogStreamer.kt:147-151`](file:///home/ubuntu/hermes-android-server/app/src/main/java/com/hermes/node/engine/LogStreamer.kt#L147-L151)
+- [x] [Review][Patch] Drain and stop LogStreamer after ProcessController.stop() completes to preserve shutdown logs [`app/src/main/java/com/hermes/node/service/HermesServerService.kt:92-95`](file:///home/ubuntu/hermes-android-server/app/src/main/java/com/hermes/node/service/HermesServerService.kt#L92-L95)
+- [x] [Review][Patch] Eliminate redundant nested withContext(ioDispatcher) in stream reading loop and check current coroutine context isActive [`app/src/main/java/com/hermes/node/engine/LogStreamer.kt:125-133`](file:///home/ubuntu/hermes-android-server/app/src/main/java/com/hermes/node/engine/LogStreamer.kt#L125-L133)
+- [x] [Review][Patch] Make _isStreaming @Volatile and correctly reflect active stream status [`app/src/main/java/com/hermes/node/engine/LogStreamer.kt:58-69`](file:///home/ubuntu/hermes-android-server/app/src/main/java/com/hermes/node/engine/LogStreamer.kt#L58-L69)
+- [x] [Review][Patch] Improve log level parsing heuristics for stderr 'INFO:' prefix and case-insensitivity [`app/src/main/java/com/hermes/node/engine/LogStreamer.kt:173-196`](file:///home/ubuntu/hermes-android-server/app/src/main/java/com/hermes/node/engine/LogStreamer.kt#L173-L196)
+- [x] [Review][Patch] Expand ANSI stripping regex to handle private parameter sequences (e.g. cursor show/hide ?25h) [`app/src/main/java/com/hermes/node/engine/LogStreamer.kt:155`](file:///home/ubuntu/hermes-android-server/app/src/main/java/com/hermes/node/engine/LogStreamer.kt#L155)
+- [x] [Review][Patch] Expose HermesServerService.logStreamerFlow or companion accessor to connect live log stream to UI [`app/src/main/java/com/hermes/node/service/HermesServerService.kt:33-36`](file:///home/ubuntu/hermes-android-server/app/src/main/java/com/hermes/node/service/HermesServerService.kt#L33-L36)
+
 **Acceptance Criteria:**
 - Given a running process emitting output to stdout and stderr, when `LogStreamer` reads streams on `Dispatchers.IO`, then output lines are parsed into `LogEntry` items with correct `LogLevel` and emitted to `logsFlow`.
 - Given log output exceeding 2,000 lines, when new log entries are appended, then the `RingBuffer` retains exactly the 2,000 most recent entries without memory leaks.

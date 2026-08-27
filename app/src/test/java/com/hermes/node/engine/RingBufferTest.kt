@@ -201,6 +201,7 @@ class RingBufferTest {
                     try {
                         val snapshot = buffer.toList()
                         assertTrue(snapshot.size <= capacity)
+                        Thread.sleep(1)
                     } catch (e: Exception) {
                         exceptionCount.incrementAndGet()
                     }

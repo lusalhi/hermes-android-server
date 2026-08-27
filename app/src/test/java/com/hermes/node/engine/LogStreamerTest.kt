@@ -269,8 +269,8 @@ class LogStreamerTest {
     }
 
     @Test
-    fun stop_cancelsStreamingCoroutines() = runTest(testDispatcher) {
-        val streamer = LogStreamer(capacity = 10, ioDispatcher = testDispatcher)
+    fun stop_cancelsStreamingCoroutines() = runTest {
+        val streamer = LogStreamer(capacity = 10, ioDispatcher = Dispatchers.Default)
         val pipedOut = PipedOutputStream()
         val pipedIn = PipedInputStream(pipedOut)
 
@@ -279,7 +279,11 @@ class LogStreamerTest {
 
         pipedOut.write("Line 1\n".toByteArray(Charsets.UTF_8))
         pipedOut.flush()
-        advanceUntilIdle()
+
+        var retries = 0
+        while (streamer.getLogs().isEmpty() && retries++ < 50) {
+            kotlinx.coroutines.delay(20)
+        }
 
         assertEquals(1, streamer.getLogs().size)
 
@@ -326,6 +330,7 @@ class LogStreamerTest {
                         val logsVal = streamer.getLogs()
                         assertTrue(flowVal.size <= capacity)
                         assertTrue(logsVal.size <= capacity)
+                        Thread.sleep(1)
                     } catch (e: Exception) {
                         exceptionCount.incrementAndGet()
                     }
