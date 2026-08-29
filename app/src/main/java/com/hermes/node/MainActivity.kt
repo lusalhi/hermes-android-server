@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.hermes.node.data.ConfigSerializer
 import com.hermes.node.data.EncryptedConfigRepository
 import com.hermes.node.engine.BootstrapExtractor
+import com.hermes.node.engine.SystemTelemetryCollector
 import com.hermes.node.service.HermesServerService
 import com.hermes.node.ui.navigation.HermesApp
 import com.hermes.node.ui.theme.HermesTheme
@@ -25,13 +26,16 @@ class MainActivity : ComponentActivity() {
                 val extractor = BootstrapExtractor(appCtx)
                 val configRepository = EncryptedConfigRepository.create(appCtx)
                 val configSerializer = ConfigSerializer(appCtx.filesDir)
+                val telemetryCollector = SystemTelemetryCollector(appCtx)
                 return ServerViewModel(
                     context = appCtx,
                     bootstrapExtractor = extractor,
                     configRepository = configRepository,
                     configSerializer = configSerializer,
                     serviceRunningFlow = HermesServerService.isRunning,
-                    processStateFlow = HermesServerService.processState
+                    processStateFlow = HermesServerService.processState,
+                    logStreamer = HermesServerService.sharedLogStreamer,
+                    telemetryCollector = telemetryCollector
                 ) as T
             }
         }
@@ -50,5 +54,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.checkBatteryOptimizationStatus(this)
+        viewModel.resumeTelemetry()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        viewModel.pauseTelemetry()
     }
 }
+

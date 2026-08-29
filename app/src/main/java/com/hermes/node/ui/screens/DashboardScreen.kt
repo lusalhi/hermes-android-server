@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryAlert
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -38,6 +40,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,11 +49,20 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.hermes.node.ui.components.MetricCard
 import com.hermes.node.ui.components.RuntimeIntegrityCard
 import com.hermes.node.ui.components.ServerControlCard
 import com.hermes.node.ui.components.StatusPill
+import com.hermes.node.ui.components.formatBattery
+import com.hermes.node.ui.components.formatCpuUsage
+import com.hermes.node.ui.components.formatRamUsage
+import com.hermes.node.ui.components.formatTemperature
 import com.hermes.node.ui.components.formatUptime
+import com.hermes.node.ui.components.getCpuColor
+import com.hermes.node.ui.components.getThermalColor
 import com.hermes.node.ui.theme.DarkBorder
 import com.hermes.node.ui.theme.DarkSurface
 import com.hermes.node.ui.theme.HermesCyan
@@ -69,10 +82,31 @@ fun DashboardScreen(
     onRepairRuntime: (() -> Unit)? = null,
     onRequestBatteryExemption: (() -> Unit)? = null,
     onDismissBatteryPrompt: (() -> Unit)? = null,
+    onPauseTelemetry: (() -> Unit)? = null,
+    onResumeTelemetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> onResumeTelemetry?.invoke()
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> onPauseTelemetry?.invoke()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        onResumeTelemetry?.invoke()
+    }
 
     Column(
         modifier = modifier
@@ -352,16 +386,38 @@ fun DashboardScreen(
         ) {
             MetricCard(
                 title = "CPU Usage",
-                value = String.format(Locale.US, "%.1f%%", state.cpuUsagePercent),
+                value = formatCpuUsage(state.cpuUsagePercent),
                 icon = Icons.Default.Bolt,
-                iconTint = HermesCyan,
+                iconTint = getCpuColor(state.cpuUsagePercent),
+                valueColor = getCpuColor(state.cpuUsagePercent),
                 modifier = Modifier.weight(1f)
             )
             MetricCard(
                 title = "RAM Used",
-                value = "${state.memoryUsageMb} MB",
+                value = formatRamUsage(state.memoryUsageMb, state.totalMemoryMb),
                 icon = Icons.Default.Memory,
                 iconTint = HermesCyan,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            MetricCard(
+                title = "Battery",
+                value = formatBattery(state.batteryPercent, state.isCharging),
+                icon = if (state.isCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryFull,
+                iconTint = if (state.isCharging) HermesCyan else StatusRunning,
+                modifier = Modifier.weight(1f)
+            )
+            MetricCard(
+                title = "Temperature",
+                value = formatTemperature(state.batteryTemperatureCelsius),
+                icon = Icons.Default.Thermostat,
+                iconTint = getThermalColor(state.batteryTemperatureCelsius),
+                valueColor = getThermalColor(state.batteryTemperatureCelsius),
                 modifier = Modifier.weight(1f)
             )
         }
@@ -375,13 +431,6 @@ fun DashboardScreen(
                 value = formatUptime(state.uptimeSeconds),
                 icon = Icons.Default.Schedule,
                 iconTint = StatusRunning,
-                modifier = Modifier.weight(1f)
-            )
-            MetricCard(
-                title = "Temperature",
-                value = if (state.status == ServerStatus.RUNNING) "32.5 °C" else "28.0 °C",
-                icon = Icons.Default.Thermostat,
-                iconTint = StatusStarting,
                 modifier = Modifier.weight(1f)
             )
         }

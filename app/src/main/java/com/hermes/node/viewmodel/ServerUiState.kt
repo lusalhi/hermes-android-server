@@ -26,6 +26,10 @@ data class ServerUiState(
     val uptimeSeconds: Long = 0L,
     val cpuUsagePercent: Float = 0f,
     val memoryUsageMb: Long = 0L,
+    val totalMemoryMb: Long = 0L,
+    val batteryPercent: Int = 100,
+    val isCharging: Boolean = false,
+    val batteryTemperatureCelsius: Float = 0f,
     val logs: List<LogEntry> = emptyList(),
     val isAutoStartEnabled: Boolean = false,
     val selectedProvider: String = "nous_portal",
@@ -49,3 +53,4 @@ data class ServerUiState(
     val isBatteryOptimizationIgnored: Boolean = false,
     val showBatteryOptimizationPrompt: Boolean = false
 )
+

@@ -15,9 +15,13 @@ import android.content.Context
 import com.hermes.node.service.BatteryOptimizationHelper
 import com.hermes.node.service.BatteryOptimizationHelperInterface
 import com.hermes.node.service.HermesServerService
+import com.hermes.node.engine.DeviceTelemetry
 import com.hermes.node.engine.LogStreamerInterface
 import com.hermes.node.engine.ProcessControllerInterface
 import com.hermes.node.engine.ProcessState
+import com.hermes.node.engine.SystemTelemetryCollector
+import com.hermes.node.engine.TelemetryCollector
+import com.hermes.node.engine.TelemetryMonitor
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,14 +46,21 @@ class ServerViewModel(
     private val startServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.start(ctx) },
     private val stopServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.stop(ctx) },
     private val batteryOptimizationHelper: BatteryOptimizationHelperInterface? = BatteryOptimizationHelper(),
-    private val logStreamer: LogStreamerInterface? = null
+    private val logStreamer: LogStreamerInterface? = null,
+    private val telemetryCollector: TelemetryCollector? = null,
+    private val telemetryMonitor: TelemetryMonitor? = null
 ) : ViewModel() {
 
     private val context: Context? = context?.applicationContext ?: context
     private val _uiState = MutableStateFlow(ServerUiState())
     val uiState: StateFlow<ServerUiState> = _uiState.asStateFlow()
 
+    private val effectiveCollector: TelemetryCollector? = telemetryCollector ?: (this.context?.let { SystemTelemetryCollector(it, ioDispatcher = ioDispatcher) })
+    private val effectiveMonitor: TelemetryMonitor? = telemetryMonitor ?: (effectiveCollector?.let { TelemetryMonitor(it, pollingIntervalMs = 2000L, dispatcher = defaultDispatcher) })
+
     private var metricsJob: Job? = null
+    private var telemetryJob: Job? = null
+    private var isTelemetryPaused: Boolean = false
     private var transitionJob: Job? = null
     private var bootstrapJob: Job? = null
     private var saveSettingsJob: Job? = null
@@ -67,6 +78,7 @@ class ServerViewModel(
         checkAndInitializeBootstrap()
         observeServiceState()
         observeProcessState()
+        startTelemetryPolling()
     }
 
     fun performHealthCheck(): HealthCheckResult {
@@ -392,8 +404,6 @@ class ServerViewModel(
                 it.copy(
                     status = ServerStatus.RUNNING,
                     uptimeSeconds = 0L,
-                    cpuUsagePercent = 2.4f,
-                    memoryUsageMb = 85L,
                     tunnelUrl = if (it.isPublicTunnelEnabled) "https://hermes-node.trycloudflare.com" else null,
                     showBatteryOptimizationPrompt = if (shouldPrompt) true else it.showBatteryOptimizationPrompt
                 )
@@ -433,8 +443,6 @@ class ServerViewModel(
                 it.copy(
                     status = ServerStatus.STOPPED,
                     uptimeSeconds = 0L,
-                    cpuUsagePercent = 0f,
-                    memoryUsageMb = 0L,
                     tunnelUrl = null
                 )
             }
@@ -682,8 +690,6 @@ class ServerViewModel(
             it.copy(
                 status = ServerStatus.ERROR,
                 uptimeSeconds = 0L,
-                cpuUsagePercent = 0f,
-                memoryUsageMb = 0L,
                 tunnelUrl = null,
                 errorMessage = message
             )
@@ -714,8 +720,6 @@ class ServerViewModel(
                         it.copy(
                             status = ServerStatus.STOPPED,
                             uptimeSeconds = 0L,
-                            cpuUsagePercent = 0f,
-                            memoryUsageMb = 0L,
                             tunnelUrl = null
                         )
                     }
@@ -726,8 +730,6 @@ class ServerViewModel(
                         it.copy(
                             status = ServerStatus.RUNNING,
                             uptimeSeconds = 0L,
-                            cpuUsagePercent = 2.4f,
-                            memoryUsageMb = 85L,
                             tunnelUrl = if (it.isPublicTunnelEnabled) "https://hermes-node.trycloudflare.com" else null
                         )
                     }
@@ -754,8 +756,6 @@ class ServerViewModel(
                                 it.copy(
                                     status = ServerStatus.STOPPED,
                                     uptimeSeconds = 0L,
-                                    cpuUsagePercent = 0f,
-                                    memoryUsageMb = 0L,
                                     tunnelUrl = null
                                 )
                             }
@@ -774,9 +774,48 @@ class ServerViewModel(
         }
     }
 
+    fun pauseTelemetry() {
+        isTelemetryPaused = true
+        effectiveMonitor?.pause()
+        telemetryJob?.cancel()
+        telemetryJob = null
+    }
+
+    fun resumeTelemetry() {
+        isTelemetryPaused = false
+        effectiveMonitor?.resume()
+        if (telemetryJob == null || telemetryJob?.isActive != true) {
+            startTelemetryPolling()
+        }
+    }
+
     fun stopMonitoring() {
         metricsJob?.cancel()
         metricsJob = null
+        telemetryJob?.cancel()
+        telemetryJob = null
+        effectiveMonitor?.stop()
+    }
+
+    fun startTelemetryPolling() {
+        val monitor = effectiveMonitor ?: return
+
+        telemetryJob?.cancel()
+        telemetryJob = viewModelScope.launch(defaultDispatcher) {
+            monitor.start(this)
+            monitor.telemetry.collect { telemetry ->
+                _uiState.update { current ->
+                    current.copy(
+                        cpuUsagePercent = telemetry.cpuPercent,
+                        memoryUsageMb = telemetry.usedMemoryMb,
+                        totalMemoryMb = telemetry.totalMemoryMb,
+                        batteryPercent = telemetry.batteryPercent,
+                        isCharging = telemetry.isCharging,
+                        batteryTemperatureCelsius = telemetry.batteryTemperatureCelsius
+                    )
+                }
+            }
+        }
     }
 
     private fun startMetricsMonitoring() {
@@ -786,11 +825,7 @@ class ServerViewModel(
                 delay(1000)
                 _uiState.update { current ->
                     if (current.status == ServerStatus.RUNNING) {
-                        current.copy(
-                            uptimeSeconds = current.uptimeSeconds + 1,
-                            cpuUsagePercent = (1.5f + (Math.random() * 2.5f)).toFloat(),
-                            memoryUsageMb = 85L + (current.uptimeSeconds % 10)
-                        )
+                        current.copy(uptimeSeconds = current.uptimeSeconds + 1)
                     } else {
                         current
                     }
@@ -813,6 +848,9 @@ class ServerViewModel(
         super.onCleared()
         metricsJob?.cancel()
         metricsJob = null
+        telemetryJob?.cancel()
+        telemetryJob = null
+        effectiveMonitor?.stop()
         transitionJob?.cancel()
         bootstrapJob?.cancel()
         saveSettingsJob?.cancel()

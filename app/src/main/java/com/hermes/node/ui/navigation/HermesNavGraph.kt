@@ -35,6 +35,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.hermes.node.data.ConfigSerializer
 import com.hermes.node.data.EncryptedConfigRepository
 import com.hermes.node.engine.BootstrapExtractor
+import com.hermes.node.engine.SystemTelemetryCollector
 import com.hermes.node.service.HermesServerService
 
 @Composable
@@ -49,6 +50,7 @@ fun HermesApp(
                 val extractor = BootstrapExtractor(appCtx)
                 val configRepository = EncryptedConfigRepository.create(appCtx)
                 val configSerializer = ConfigSerializer(appCtx.filesDir)
+                val telemetryCollector = SystemTelemetryCollector(appCtx)
                 return ServerViewModel(
                     context = appCtx,
                     bootstrapExtractor = extractor,
@@ -56,7 +58,8 @@ fun HermesApp(
                     configSerializer = configSerializer,
                     serviceRunningFlow = HermesServerService.isRunning,
                     processStateFlow = HermesServerService.processState,
-                    logStreamer = HermesServerService.sharedLogStreamer
+                    logStreamer = HermesServerService.sharedLogStreamer,
+                    telemetryCollector = telemetryCollector
                 ) as T
             }
         }
@@ -116,7 +119,9 @@ fun HermesApp(
                     onRetryBootstrap = viewModel::triggerBootstrap,
                     onRepairRuntime = viewModel::onRepairRuntime,
                     onRequestBatteryExemption = { viewModel.onRequestBatteryExemption(context) },
-                    onDismissBatteryPrompt = viewModel::onDismissBatteryOptimizationPrompt
+                    onDismissBatteryPrompt = viewModel::onDismissBatteryOptimizationPrompt,
+                    onPauseTelemetry = viewModel::pauseTelemetry,
+                    onResumeTelemetry = viewModel::resumeTelemetry
                 )
             }
             composable(Screen.Logs.route) {

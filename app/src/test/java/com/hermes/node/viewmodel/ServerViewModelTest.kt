@@ -9,6 +9,8 @@ import com.hermes.node.data.model.GatewayConfig
 import com.hermes.node.data.model.HermesConfig
 import com.hermes.node.data.model.ProviderConfig
 import com.hermes.node.data.model.SystemConfig
+import com.hermes.node.engine.DeviceTelemetry
+import com.hermes.node.engine.TelemetryCollector
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -1337,5 +1339,186 @@ class ServerViewModelTest {
         }
 
         override fun getLogs(): List<LogEntry> = _logsFlow.value
+    }
+
+    @Test
+    fun telemetry_integrationWithViewModel_pollsAndUpdateState() = runTest(testDispatcher) {
+        val fakeCollector = FakeTelemetryCollector(
+            currentReading = DeviceTelemetry(
+                cpuPercent = 5.0f,
+                usedMemoryMb = 1200L,
+                totalMemoryMb = 4096L,
+                batteryPercent = 90,
+                isCharging = false,
+                batteryTemperatureCelsius = 31.0f
+            )
+        )
+
+        val vm = ServerViewModel(
+            telemetryCollector = fakeCollector,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testScheduler.advanceTimeBy(10)
+
+        // Initial sample
+        val state1 = vm.uiState.value
+        assertEquals(5.0f, state1.cpuUsagePercent, 0.001f)
+        assertEquals(1200L, state1.memoryUsageMb)
+        assertEquals(4096L, state1.totalMemoryMb)
+        assertEquals(90, state1.batteryPercent)
+        assertFalse(state1.isCharging)
+        assertEquals(31.0f, state1.batteryTemperatureCelsius, 0.001f)
+
+        // Advance 2 seconds with updated hardware vitals
+        fakeCollector.currentReading = DeviceTelemetry(
+            cpuPercent = 82.5f,
+            usedMemoryMb = 2100L,
+            totalMemoryMb = 4096L,
+            batteryPercent = 89,
+            isCharging = true,
+            batteryTemperatureCelsius = 39.5f
+        )
+        testScheduler.advanceTimeBy(2000)
+
+        val state2 = vm.uiState.value
+        assertEquals(82.5f, state2.cpuUsagePercent, 0.001f)
+        assertEquals(2100L, state2.memoryUsageMb)
+        assertEquals(4096L, state2.totalMemoryMb)
+        assertEquals(89, state2.batteryPercent)
+        assertTrue(state2.isCharging)
+        assertEquals(39.5f, state2.batteryTemperatureCelsius, 0.001f)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun telemetry_continuesPollingWhenServerStopped_whileUptimeRemainsZero() = runTest(testDispatcher) {
+        val fakeCollector = FakeTelemetryCollector(
+            currentReading = DeviceTelemetry(
+                cpuPercent = 3.0f,
+                usedMemoryMb = 1000L,
+                totalMemoryMb = 4096L,
+                batteryPercent = 100,
+                isCharging = true,
+                batteryTemperatureCelsius = 28.0f
+            )
+        )
+
+        val vm = ServerViewModel(
+            telemetryCollector = fakeCollector,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testScheduler.advanceTimeBy(10)
+        assertEquals(ServerStatus.STOPPED, vm.uiState.value.status)
+        assertEquals(0L, vm.uiState.value.uptimeSeconds)
+        assertEquals(3.0f, vm.uiState.value.cpuUsagePercent, 0.001f)
+
+        // Hardware reading changes while server is STOPPED
+        fakeCollector.currentReading = DeviceTelemetry(
+            cpuPercent = 12.0f,
+            usedMemoryMb = 1100L,
+            totalMemoryMb = 4096L,
+            batteryPercent = 99,
+            isCharging = false,
+            batteryTemperatureCelsius = 29.5f
+        )
+        testScheduler.advanceTimeBy(2000)
+
+        val stoppedState = vm.uiState.value
+        assertEquals(ServerStatus.STOPPED, stoppedState.status)
+        assertEquals(0L, stoppedState.uptimeSeconds) // Uptime does NOT increment when STOPPED
+        assertEquals(12.0f, stoppedState.cpuUsagePercent, 0.001f)
+        assertEquals(1100L, stoppedState.memoryUsageMb)
+        assertEquals(99, stoppedState.batteryPercent)
+        assertFalse(stoppedState.isCharging)
+        assertEquals(29.5f, stoppedState.batteryTemperatureCelsius, 0.001f)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun telemetry_lifecyclePauseAndResume_controlsPollingLoop() = runTest(testDispatcher) {
+        val fakeCollector = FakeTelemetryCollector(
+            currentReading = DeviceTelemetry(cpuPercent = 10.0f)
+        )
+
+        val vm = ServerViewModel(
+            telemetryCollector = fakeCollector,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testScheduler.advanceTimeBy(10)
+        assertEquals(10.0f, vm.uiState.value.cpuUsagePercent, 0.001f)
+
+        // Pause telemetry (app backgrounded)
+        vm.pauseTelemetry()
+
+        fakeCollector.currentReading = DeviceTelemetry(cpuPercent = 55.0f)
+        testScheduler.advanceTimeBy(4000)
+
+        // While paused, UI state is not updated
+        assertEquals(10.0f, vm.uiState.value.cpuUsagePercent, 0.001f)
+
+        // Resume telemetry (app foregrounded)
+        vm.resumeTelemetry()
+        testScheduler.advanceTimeBy(2000)
+
+        assertEquals(55.0f, vm.uiState.value.cpuUsagePercent, 0.001f)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun telemetry_handlesCollectorErrorsGracefully_retainingPreviousValidReading() = runTest(testDispatcher) {
+        val fakeCollector = FakeTelemetryCollector(
+            currentReading = DeviceTelemetry(
+                cpuPercent = 22.0f,
+                usedMemoryMb = 1400L,
+                totalMemoryMb = 4096L,
+                batteryPercent = 75,
+                isCharging = false,
+                batteryTemperatureCelsius = 35.0f
+            )
+        )
+
+        val vm = ServerViewModel(
+            telemetryCollector = fakeCollector,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testScheduler.advanceTimeBy(10)
+        assertEquals(22.0f, vm.uiState.value.cpuUsagePercent, 0.001f)
+
+        // Simulate sensor failure
+        fakeCollector.shouldFail = true
+        testScheduler.advanceTimeBy(2000)
+
+        // Retains previous valid reading without crashing
+        val state = vm.uiState.value
+        assertEquals(22.0f, state.cpuUsagePercent, 0.001f)
+        assertEquals(1400L, state.memoryUsageMb)
+        assertEquals(75, state.batteryPercent)
+        assertEquals(35.0f, state.batteryTemperatureCelsius, 0.001f)
+
+        vm.stopMonitoring()
+    }
+
+    private class FakeTelemetryCollector(
+        var currentReading: DeviceTelemetry = DeviceTelemetry(),
+        var shouldFail: Boolean = false
+    ) : TelemetryCollector {
+        var collectCalls = 0
+
+        override suspend fun collect(): DeviceTelemetry {
+            collectCalls++
+            if (shouldFail) throw RuntimeException("Simulated hardware sensor read failure")
+            return currentReading
+        }
     }
 }
