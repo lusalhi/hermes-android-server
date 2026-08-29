@@ -60,7 +60,6 @@ class ServerViewModel(
 
     private var metricsJob: Job? = null
     private var telemetryJob: Job? = null
-    private var isTelemetryPaused: Boolean = false
     private var transitionJob: Job? = null
     private var bootstrapJob: Job? = null
     private var saveSettingsJob: Job? = null
@@ -243,8 +242,6 @@ class ServerViewModel(
                 it.copy(
                     status = ServerStatus.STOPPED,
                     uptimeSeconds = 0L,
-                    cpuUsagePercent = 0f,
-                    memoryUsageMb = 0L,
                     tunnelUrl = null
                 )
             }
@@ -775,14 +772,12 @@ class ServerViewModel(
     }
 
     fun pauseTelemetry() {
-        isTelemetryPaused = true
         effectiveMonitor?.pause()
         telemetryJob?.cancel()
         telemetryJob = null
     }
 
     fun resumeTelemetry() {
-        isTelemetryPaused = false
         effectiveMonitor?.resume()
         if (telemetryJob == null || telemetryJob?.isActive != true) {
             startTelemetryPolling()

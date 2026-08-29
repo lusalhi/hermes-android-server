@@ -383,4 +383,49 @@ class TelemetryMonitorTest {
         assertEquals("1536 / 4096 MB", formatRamUsage(1536L, 4096L))
         assertEquals("1536 MB", formatRamUsage(1536L, 0L))
     }
+
+    @Test
+    fun parseBatteryValues_withLargeValues_doesNotOverflow() {
+        val (percent, isCharging, temp) = SystemTelemetryCollector.parseBatteryValues(
+            level = 25000000,
+            scale = 50000000,
+            rawTemperature = 320,
+            status = BatteryManager.BATTERY_STATUS_CHARGING
+        )
+        assertEquals(50, percent)
+        assertTrue(isCharging)
+        assertEquals(32.0f, temp, 0.001f)
+    }
+
+    @Test
+    fun telemetryMonitor_enforcesMinimumIntervalFloor() {
+        val fakeCollector = object : TelemetryCollector {
+            override suspend fun collect(): DeviceTelemetry = DeviceTelemetry()
+        }
+        val monitorFast = TelemetryMonitor(
+            collector = fakeCollector,
+            pollingIntervalMs = 50L,
+            dispatcher = testDispatcher
+        )
+        assertEquals(1000L, monitorFast.pollingIntervalMs)
+
+        val monitorZero = TelemetryMonitor(
+            collector = fakeCollector,
+            pollingIntervalMs = 0L,
+            dispatcher = testDispatcher
+        )
+        assertEquals(1000L, monitorZero.pollingIntervalMs)
+    }
+
+    @Test
+    fun systemTelemetryCollector_collectMemory_fallbackWhenNoContext() {
+        val collector = SystemTelemetryCollector(
+            context = null,
+            activityManager = null,
+            ioDispatcher = testDispatcher
+        )
+        val (usedMb, totalMb) = collector.collectMemory()
+        assertTrue(totalMb > 0L)
+        assertTrue(usedMb >= 0L)
+    }
 }

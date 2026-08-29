@@ -184,8 +184,12 @@ open class SystemTelemetryCollector(
             lastRealtime = currentRealtime
 
             if (prevRealtime > 0L && currentRealtime > prevRealtime) {
-                val deltaCpu = (currentCpuTime - prevCpu).coerceAtLeast(0L)
                 val deltaRealtime = currentRealtime - prevRealtime
+                // If delta is excessively large (e.g. initial transition from /proc/stat), treat as baseline
+                if (deltaRealtime > 10000L) {
+                    return 0f
+                }
+                val deltaCpu = (currentCpuTime - prevCpu).coerceAtLeast(0L)
                 val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
                 val usage = (deltaCpu.toFloat() / (deltaRealtime.toFloat() * cores)) * 100f
                 usage.coerceIn(0f, 100f)
@@ -219,7 +223,7 @@ open class SystemTelemetryCollector(
         ): Triple<Int, Boolean, Float> {
             val tempCelsius = rawTemperature / 10.0f
             val batteryPercent = if (level >= 0 && scale > 0) {
-                ((level * 100) / scale).coerceIn(0, 100)
+                ((level.toLong() * 100L) / scale.toLong()).toInt().coerceIn(0, 100)
             } else {
                 100
             }
@@ -295,9 +299,11 @@ open class SystemTelemetryCollector(
  */
 class TelemetryMonitor(
     private val collector: TelemetryCollector,
-    val pollingIntervalMs: Long = 2000L,
+    pollingIntervalMs: Long = 2000L,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default
 ) {
+    val pollingIntervalMs: Long = pollingIntervalMs.coerceAtLeast(1000L)
+
     private val _telemetry = MutableStateFlow(DeviceTelemetry())
     val telemetry: StateFlow<DeviceTelemetry> = _telemetry.asStateFlow()
 
@@ -314,6 +320,7 @@ class TelemetryMonitor(
     /**
      * Starts the polling loop within the provided [scope].
      */
+    @Synchronized
     fun start(scope: CoroutineScope) {
         if (pollingJob != null && pollingJob?.isActive == true) return
         isPolling = true
@@ -338,6 +345,7 @@ class TelemetryMonitor(
     /**
      * Pauses the telemetry polling loop to conserve battery/CPU when backgrounded.
      */
+    @Synchronized
     fun pause() {
         isPaused = true
     }
@@ -345,6 +353,7 @@ class TelemetryMonitor(
     /**
      * Resumes the telemetry polling loop when returning to foreground.
      */
+    @Synchronized
     fun resume() {
         isPaused = false
     }
@@ -352,6 +361,7 @@ class TelemetryMonitor(
     /**
      * Stops the polling loop.
      */
+    @Synchronized
     fun stop() {
         isPolling = false
         isPaused = false

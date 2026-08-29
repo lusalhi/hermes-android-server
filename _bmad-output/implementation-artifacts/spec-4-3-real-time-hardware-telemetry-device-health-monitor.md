@@ -80,6 +80,19 @@ context:
 - Given high CPU load (>75%) or elevated battery temperature (>38°C), then corresponding metric card icons/values adaptively change to warning/critical status colors.
 - Given unit tests in `TelemetryMonitorTest` and `ServerViewModelTest`, 100% of telemetry calculations and state transitions pass cleanly.
 
+### Review Findings
+
+- [x] [Review][Patch] Fix stale unit test assertions expecting removed fake metrics [app/src/test/java/com/hermes/node/viewmodel/ServerViewModelTest.kt:82-83, 101-102]
+- [x] [Review][Patch] Remove unnecessary reset of cpuUsagePercent and memoryUsageMb in onRepairRuntime [app/src/main/java/com/hermes/node/viewmodel/ServerViewModel.kt:246-247]
+- [x] [Review][Patch] Prevent 32-bit integer overflow when calculating battery percentage with large level values [app/src/main/java/com/hermes/node/engine/TelemetryMonitor.kt:461-463]
+- [x] [Review][Patch] Enforce minimum 1000ms polling interval floor in TelemetryMonitor to prevent CPU churn [app/src/main/java/com/hermes/node/engine/TelemetryMonitor.kt:539, 573]
+- [x] [Review][Patch] Add synchronized guards to TelemetryMonitor start, stop, pause, and resume [app/src/main/java/com/hermes/node/engine/TelemetryMonitor.kt:557-600]
+- [x] [Review][Patch] Reset previous CPU baseline timestamp when transitioning to process CPU fallback in SystemTelemetryCollector [app/src/main/java/com/hermes/node/engine/TelemetryMonitor.kt:415-438]
+- [x] [Review][Patch] Clean up unused private isTelemetryPaused variable in ServerViewModel [app/src/main/java/com/hermes/node/viewmodel/ServerViewModel.kt:1020]
+- [x] [Review][Patch] Add unit test coverage for edge cases, collector fallbacks, and boundary temperatures [app/src/test/java/com/hermes/node/engine/TelemetryMonitorTest.kt]
+- [x] [Review][Defer] Child Node subprocess CPU tracking when running under restricted /proc/stat Android sandbox [app/src/main/java/com/hermes/node/engine/TelemetryMonitor.kt:415] — deferred, pre-existing
+- [x] [Review][Defer] Adaptive status warning icon/color when battery level is critically low [app/src/main/java/com/hermes/node/ui/screens/DashboardScreen.kt:434] — deferred, pre-existing
+
 ## Spec Change Log
 
 _None._

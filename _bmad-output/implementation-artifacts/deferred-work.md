@@ -11,3 +11,8 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-init-android-project-scaffold.md`
   summary: Implement BootCompletedReceiver for auto-start on boot functionality.
   evidence: RECEIVE_BOOT_COMPLETED is declared in manifest and toggled in UI, and the receiver will be wired when ForegroundService is created.
+
+## Deferred from: code review of spec-4-3-real-time-hardware-telemetry-device-health-monitor.md (2026-08-29)
+
+- **Child Node Subprocess CPU Tracking**: When running under restricted `/proc/stat` Android sandbox policies, `SystemTelemetryCollector.collectProcessCpuFallback()` measures host JVM CPU rather than child Node processes. Deferred as future enhancement for multi-process telemetry architecture.
+- **Adaptive Low Battery Styling**: Adding dynamic critical status color transitions and warning icons (`BatteryAlert`) when battery charge drops below 15-20% while discharging. Deferred as future UX enhancement.
