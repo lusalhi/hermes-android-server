@@ -1505,6 +1505,230 @@ class ServerViewModelTest {
         vm.stopMonitoring()
     }
 
+    @Test
+    fun onUpdateGatewaySettings_updatesAllGatewayStateFields() {
+        viewModel.onUpdateTelegramEnabled(true)
+        assertTrue(viewModel.uiState.value.isTelegramEnabled)
+
+        viewModel.onUpdateTelegramToken("12345:TG")
+        assertEquals("12345:TG", viewModel.uiState.value.telegramToken)
+
+        viewModel.onUpdateTelegramAdminUserIds("111,222")
+        assertEquals("111,222", viewModel.uiState.value.telegramAdminUserIds)
+
+        viewModel.onUpdateDiscordEnabled(true)
+        assertTrue(viewModel.uiState.value.isDiscordEnabled)
+
+        viewModel.onUpdateDiscordToken("OTg3.DISCORD")
+        assertEquals("OTg3.DISCORD", viewModel.uiState.value.discordToken)
+
+        viewModel.onUpdateDiscordChannelIds("ch-1,ch-2")
+        assertEquals("ch-1,ch-2", viewModel.uiState.value.discordChannelIds)
+
+        viewModel.onUpdateSlackEnabled(true)
+        assertTrue(viewModel.uiState.value.isSlackEnabled)
+
+        viewModel.onUpdateSlackAppToken("xapp-123")
+        assertEquals("xapp-123", viewModel.uiState.value.slackAppToken)
+
+        viewModel.onUpdateSlackBotToken("xoxb-456")
+        assertEquals("xoxb-456", viewModel.uiState.value.slackBotToken)
+
+        viewModel.onUpdateWhatsAppEnabled(true)
+        assertTrue(viewModel.uiState.value.isWhatsAppEnabled)
+
+        viewModel.onUpdateWhatsAppSessionLink("https://wa.me/test")
+        assertEquals("https://wa.me/test", viewModel.uiState.value.whatsAppSessionLink)
+
+        viewModel.onUpdateWhatsAppWebhookToken("wh-tok-99")
+        assertEquals("wh-tok-99", viewModel.uiState.value.whatsAppWebhookToken)
+
+        viewModel.onUpdateRestApiEnabled(false)
+        assertFalse(viewModel.uiState.value.isRestApiEnabled)
+
+        viewModel.onUpdateRestApiPort("9090")
+        assertEquals("9090", viewModel.uiState.value.restApiPort)
+    }
+
+    @Test
+    fun onSaveSettings_withAllGateways_persistsEncryptedAndTrimsInputs() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_gateways_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        // Set inputs with leading/trailing whitespace
+        vm.onUpdateTelegramEnabled(true)
+        vm.onUpdateTelegramToken("  12345:TG-TOKEN  ")
+        vm.onUpdateTelegramAdminUserIds("  111,222  ")
+
+        vm.onUpdateDiscordEnabled(true)
+        vm.onUpdateDiscordToken("  OTg3.DISCORD_TOKEN  ")
+        vm.onUpdateDiscordChannelIds("  ch-1,ch-2  ")
+
+        vm.onUpdateSlackEnabled(true)
+        vm.onUpdateSlackAppToken("  xapp-test-app  ")
+        vm.onUpdateSlackBotToken("  xoxb-test-bot  ")
+
+        vm.onUpdateWhatsAppEnabled(true)
+        vm.onUpdateWhatsAppSessionLink("  https://wa.me/test  ")
+        vm.onUpdateWhatsAppWebhookToken("  wh-secret-tok  ")
+
+        vm.onUpdateRestApiEnabled(true)
+        vm.onUpdateRestApiPort("  9000  ")
+
+        vm.onSaveSettings()
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertTrue(state.isSettingsSaved)
+
+        // Verify trimming in UI state
+        assertEquals("12345:TG-TOKEN", state.telegramToken)
+        assertEquals("111,222", state.telegramAdminUserIds)
+        assertEquals("OTg3.DISCORD_TOKEN", state.discordToken)
+        assertEquals("ch-1,ch-2", state.discordChannelIds)
+        assertEquals("xapp-test-app", state.slackAppToken)
+        assertEquals("xoxb-test-bot", state.slackBotToken)
+        assertEquals("https://wa.me/test", state.whatsAppSessionLink)
+        assertEquals("wh-secret-tok", state.whatsAppWebhookToken)
+        assertEquals("9000", state.restApiPort)
+
+        // Verify repository persistence
+        val savedConfig = repository.getConfig()
+        assertTrue(savedConfig.gateway.telegram.enabled)
+        assertEquals("12345:TG-TOKEN", savedConfig.gateway.telegram.botToken)
+        assertEquals("111,222", savedConfig.gateway.telegram.adminUserIds)
+
+        assertTrue(savedConfig.gateway.discord.enabled)
+        assertEquals("OTg3.DISCORD_TOKEN", savedConfig.gateway.discord.botToken)
+        assertEquals("ch-1,ch-2", savedConfig.gateway.discord.channelIds)
+
+        assertTrue(savedConfig.gateway.slack.enabled)
+        assertEquals("xapp-test-app", savedConfig.gateway.slack.appToken)
+        assertEquals("xoxb-test-bot", savedConfig.gateway.slack.botToken)
+
+        assertTrue(savedConfig.gateway.whatsapp.enabled)
+        assertEquals("https://wa.me/test", savedConfig.gateway.whatsapp.sessionLink)
+        assertEquals("wh-secret-tok", savedConfig.gateway.whatsapp.webhookToken)
+
+        assertTrue(savedConfig.gateway.restApi.enabled)
+        assertEquals(9000, savedConfig.gateway.restApi.port)
+
+        // Verify hermes.json content
+        val json = org.json.JSONObject(configFile.readText(Charsets.UTF_8))
+        val gateways = json.getJSONObject("gateways")
+        assertEquals("12345:TG-TOKEN", gateways.getJSONObject("telegram").getString("bot_token"))
+        assertEquals("OTg3.DISCORD_TOKEN", gateways.getJSONObject("discord").getString("bot_token"))
+        assertEquals("xapp-test-app", gateways.getJSONObject("slack").getString("app_token"))
+        assertEquals("https://wa.me/test", gateways.getJSONObject("whatsapp").getString("session_link"))
+        assertEquals(9000, gateways.getJSONObject("rest_api").getInt("port"))
+
+        tempDir.deleteRecursively()
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onSaveSettings_withInvalidPort_fallsBackTo8000Gracefully() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_port_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onUpdateRestApiPort("invalid_port_number")
+        vm.onSaveSettings()
+        testScheduler.advanceUntilIdle()
+
+        val savedConfig = repository.getConfig()
+        assertEquals(8000, savedConfig.gateway.restApi.port)
+        assertEquals("8000", vm.uiState.value.restApiPort)
+
+        tempDir.deleteRecursively()
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun loadPersistedConfig_withAllGateways_populatesUiStateCorrectly() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        repository.saveConfig(
+            HermesConfig(
+                gateway = GatewayConfig(
+                    telegram = com.hermes.node.data.model.TelegramGatewayConfig(
+                        enabled = true,
+                        botToken = "tg-token-saved",
+                        adminUserIds = "100,200"
+                    ),
+                    discord = com.hermes.node.data.model.DiscordGatewayConfig(
+                        enabled = true,
+                        botToken = "disc-token-saved",
+                        channelIds = "ch-1"
+                    ),
+                    slack = com.hermes.node.data.model.SlackGatewayConfig(
+                        enabled = true,
+                        appToken = "slack-app-saved",
+                        botToken = "slack-bot-saved"
+                    ),
+                    whatsapp = com.hermes.node.data.model.WhatsAppGatewayConfig(
+                        enabled = true,
+                        sessionLink = "wa-link-saved",
+                        webhookToken = "wa-tok-saved"
+                    ),
+                    restApi = com.hermes.node.data.model.RestApiGatewayConfig(
+                        enabled = true,
+                        port = 8888
+                    )
+                )
+            )
+        )
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        val state = vm.uiState.value
+        assertTrue(state.isTelegramEnabled)
+        assertEquals("tg-token-saved", state.telegramToken)
+        assertEquals("100,200", state.telegramAdminUserIds)
+
+        assertTrue(state.isDiscordEnabled)
+        assertEquals("disc-token-saved", state.discordToken)
+        assertEquals("ch-1", state.discordChannelIds)
+
+        assertTrue(state.isSlackEnabled)
+        assertEquals("slack-app-saved", state.slackAppToken)
+        assertEquals("slack-bot-saved", state.slackBotToken)
+
+        assertTrue(state.isWhatsAppEnabled)
+        assertEquals("wa-link-saved", state.whatsAppSessionLink)
+        assertEquals("wa-tok-saved", state.whatsAppWebhookToken)
+
+        assertTrue(state.isRestApiEnabled)
+        assertEquals("8888", state.restApiPort)
+
+        vm.stopMonitoring()
+    }
+
     private class FakeTelemetryCollector(
         var currentReading: DeviceTelemetry = DeviceTelemetry(),
         var shouldFail: Boolean = false

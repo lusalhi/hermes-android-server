@@ -4,10 +4,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.node.data.ConfigRepository
 import com.hermes.node.data.ConfigSerializer
+import com.hermes.node.data.model.DiscordGatewayConfig
 import com.hermes.node.data.model.GatewayConfig
 import com.hermes.node.data.model.HermesConfig
 import com.hermes.node.data.model.ProviderConfig
+import com.hermes.node.data.model.RestApiGatewayConfig
+import com.hermes.node.data.model.SlackGatewayConfig
 import com.hermes.node.data.model.SystemConfig
+import com.hermes.node.data.model.TelegramGatewayConfig
+import com.hermes.node.data.model.WhatsAppGatewayConfig
 import com.hermes.node.engine.BootstrapExtractor
 import com.hermes.node.engine.ExtractionResult
 import com.hermes.node.engine.HealthCheckResult
@@ -405,9 +410,23 @@ class ServerViewModel(
                     showBatteryOptimizationPrompt = if (shouldPrompt) true else it.showBatteryOptimizationPrompt
                 )
             }
-            onAddLog("Hermes Node daemon running on port 8000", LogLevel.INFO)
-            if (_uiState.value.telegramToken.isNotBlank()) {
+            val port = _uiState.value.restApiPort.toIntOrNull() ?: 8000
+            if (_uiState.value.isRestApiEnabled) {
+                onAddLog("Hermes Node daemon running on port $port", LogLevel.INFO)
+            } else {
+                onAddLog("Hermes Node daemon running (REST API disabled)", LogLevel.INFO)
+            }
+            if (_uiState.value.isTelegramEnabled && _uiState.value.telegramToken.isNotBlank()) {
                 onAddLog("Telegram Gateway connected successfully.", LogLevel.INFO)
+            }
+            if (_uiState.value.isDiscordEnabled && _uiState.value.discordToken.isNotBlank()) {
+                onAddLog("Discord Gateway connected successfully.", LogLevel.INFO)
+            }
+            if (_uiState.value.isSlackEnabled && (_uiState.value.slackAppToken.isNotBlank() || _uiState.value.slackBotToken.isNotBlank())) {
+                onAddLog("Slack Gateway connected successfully.", LogLevel.INFO)
+            }
+            if (_uiState.value.isWhatsAppEnabled && (_uiState.value.whatsAppSessionLink.isNotBlank() || _uiState.value.whatsAppWebhookToken.isNotBlank())) {
+                onAddLog("WhatsApp Gateway connected successfully.", LogLevel.INFO)
             }
             startMetricsMonitoring()
         }
@@ -477,15 +496,35 @@ class ServerViewModel(
                 current.copy(
                     selectedProvider = config.provider.provider.ifEmpty { current.selectedProvider },
                     apiKey = config.provider.apiKey,
-                    telegramToken = config.gateway.telegramToken,
                     customModel = config.provider.model,
                     customBaseUrl = config.provider.baseUrl,
+                    isTelegramEnabled = config.gateway.telegram.enabled,
+                    telegramToken = config.gateway.telegram.botToken,
+                    telegramAdminUserIds = config.gateway.telegram.adminUserIds,
+                    isDiscordEnabled = config.gateway.discord.enabled,
+                    discordToken = config.gateway.discord.botToken,
+                    discordChannelIds = config.gateway.discord.channelIds,
+                    isSlackEnabled = config.gateway.slack.enabled,
+                    slackAppToken = config.gateway.slack.appToken,
+                    slackBotToken = config.gateway.slack.botToken,
+                    isWhatsAppEnabled = config.gateway.whatsapp.enabled,
+                    whatsAppSessionLink = config.gateway.whatsapp.sessionLink,
+                    whatsAppWebhookToken = config.gateway.whatsapp.webhookToken,
+                    isRestApiEnabled = config.gateway.restApi.enabled,
+                    restApiPort = config.gateway.restApi.port.toString(),
                     isAutoStartEnabled = autoStart,
                     isPublicTunnelEnabled = config.system.publicTunnelEnabled,
                     showBatteryOptimizationPrompt = if (shouldPrompt) true else current.showBatteryOptimizationPrompt
                 )
             }
-            if (config.provider.apiKey.isNotBlank() || config.gateway.telegramToken.isNotBlank()) {
+            val hasCredentials = config.provider.apiKey.isNotBlank() ||
+                config.gateway.telegram.botToken.isNotBlank() ||
+                config.gateway.discord.botToken.isNotBlank() ||
+                config.gateway.slack.appToken.isNotBlank() ||
+                config.gateway.slack.botToken.isNotBlank() ||
+                config.gateway.whatsapp.webhookToken.isNotBlank() ||
+                config.gateway.whatsapp.sessionLink.isNotBlank()
+            if (hasCredentials) {
                 onAddLog("Loaded persisted credentials securely from repository.", LogLevel.INFO)
             }
         } catch (e: Exception) {
@@ -505,17 +544,36 @@ class ServerViewModel(
         saveSettingsJob = viewModelScope.launch(ioDispatcher) {
             val currentState = _uiState.value
             val trimmedApiKey = currentState.apiKey.trim()
-            val trimmedTelegramToken = currentState.telegramToken.trim()
             val trimmedCustomModel = currentState.customModel.trim()
             val trimmedCustomBaseUrl = currentState.customBaseUrl.trim()
+
+            val trimmedTelegramToken = currentState.telegramToken.trim()
+            val trimmedTelegramAdminIds = currentState.telegramAdminUserIds.trim()
+            val trimmedDiscordToken = currentState.discordToken.trim()
+            val trimmedDiscordChannelIds = currentState.discordChannelIds.trim()
+            val trimmedSlackAppToken = currentState.slackAppToken.trim()
+            val trimmedSlackBotToken = currentState.slackBotToken.trim()
+            val trimmedWhatsAppSessionLink = currentState.whatsAppSessionLink.trim()
+            val trimmedWhatsAppWebhookToken = currentState.whatsAppWebhookToken.trim()
+            val trimmedPortStr = currentState.restApiPort.trim()
+            val parsedPort = trimmedPortStr.toIntOrNull() ?: 8000
+            val finalPort = if (parsedPort in 1..65535) parsedPort else 8000
 
             // Update UI state with trimmed inputs
             _uiState.update {
                 it.copy(
                     apiKey = trimmedApiKey,
-                    telegramToken = trimmedTelegramToken,
                     customModel = trimmedCustomModel,
-                    customBaseUrl = trimmedCustomBaseUrl
+                    customBaseUrl = trimmedCustomBaseUrl,
+                    telegramToken = trimmedTelegramToken,
+                    telegramAdminUserIds = trimmedTelegramAdminIds,
+                    discordToken = trimmedDiscordToken,
+                    discordChannelIds = trimmedDiscordChannelIds,
+                    slackAppToken = trimmedSlackAppToken,
+                    slackBotToken = trimmedSlackBotToken,
+                    whatsAppSessionLink = trimmedWhatsAppSessionLink,
+                    whatsAppWebhookToken = trimmedWhatsAppWebhookToken,
+                    restApiPort = finalPort.toString()
                 )
             }
 
@@ -527,8 +585,30 @@ class ServerViewModel(
                     baseUrl = trimmedCustomBaseUrl
                 ),
                 gateway = GatewayConfig(
-                    telegramToken = trimmedTelegramToken,
-                    isTelegramEnabled = trimmedTelegramToken.isNotBlank()
+                    telegram = TelegramGatewayConfig(
+                        enabled = currentState.isTelegramEnabled,
+                        botToken = trimmedTelegramToken,
+                        adminUserIds = trimmedTelegramAdminIds
+                    ),
+                    discord = DiscordGatewayConfig(
+                        enabled = currentState.isDiscordEnabled,
+                        botToken = trimmedDiscordToken,
+                        channelIds = trimmedDiscordChannelIds
+                    ),
+                    slack = SlackGatewayConfig(
+                        enabled = currentState.isSlackEnabled,
+                        appToken = trimmedSlackAppToken,
+                        botToken = trimmedSlackBotToken
+                    ),
+                    whatsapp = WhatsAppGatewayConfig(
+                        enabled = currentState.isWhatsAppEnabled,
+                        sessionLink = trimmedWhatsAppSessionLink,
+                        webhookToken = trimmedWhatsAppWebhookToken
+                    ),
+                    restApi = RestApiGatewayConfig(
+                        enabled = currentState.isRestApiEnabled,
+                        port = finalPort
+                    )
                 ),
                 system = SystemConfig(
                     autoStartOnBoot = currentState.isAutoStartEnabled,
@@ -595,8 +675,102 @@ class ServerViewModel(
         _uiState.update { it.copy(apiKey = apiKey, isSettingsSaved = false, configSaveMessage = null) }
     }
 
+    fun onUpdateTelegramEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(isTelegramEnabled = enabled, isSettingsSaved = false, configSaveMessage = null) }
+    }
+
     fun onUpdateTelegramToken(token: String) {
-        _uiState.update { it.copy(telegramToken = token, isSettingsSaved = false, configSaveMessage = null) }
+        _uiState.update { current ->
+            current.copy(
+                telegramToken = token,
+                isTelegramEnabled = if (token.isNotBlank() && !current.isTelegramEnabled && current.telegramToken.isEmpty()) true else current.isTelegramEnabled,
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+    }
+
+    fun onUpdateTelegramAdminUserIds(adminUserIds: String) {
+        _uiState.update { it.copy(telegramAdminUserIds = adminUserIds, isSettingsSaved = false, configSaveMessage = null) }
+    }
+
+    fun onUpdateDiscordEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(isDiscordEnabled = enabled, isSettingsSaved = false, configSaveMessage = null) }
+    }
+
+    fun onUpdateDiscordToken(token: String) {
+        _uiState.update { current ->
+            current.copy(
+                discordToken = token,
+                isDiscordEnabled = if (token.isNotBlank() && !current.isDiscordEnabled && current.discordToken.isEmpty()) true else current.isDiscordEnabled,
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+    }
+
+    fun onUpdateDiscordChannelIds(channelIds: String) {
+        _uiState.update { it.copy(discordChannelIds = channelIds, isSettingsSaved = false, configSaveMessage = null) }
+    }
+
+    fun onUpdateSlackEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(isSlackEnabled = enabled, isSettingsSaved = false, configSaveMessage = null) }
+    }
+
+    fun onUpdateSlackAppToken(appToken: String) {
+        _uiState.update { current ->
+            current.copy(
+                slackAppToken = appToken,
+                isSlackEnabled = if (appToken.isNotBlank() && !current.isSlackEnabled && current.slackAppToken.isEmpty()) true else current.isSlackEnabled,
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+    }
+
+    fun onUpdateSlackBotToken(botToken: String) {
+        _uiState.update { current ->
+            current.copy(
+                slackBotToken = botToken,
+                isSlackEnabled = if (botToken.isNotBlank() && !current.isSlackEnabled && current.slackBotToken.isEmpty()) true else current.isSlackEnabled,
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+    }
+
+    fun onUpdateWhatsAppEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(isWhatsAppEnabled = enabled, isSettingsSaved = false, configSaveMessage = null) }
+    }
+
+    fun onUpdateWhatsAppSessionLink(sessionLink: String) {
+        _uiState.update { current ->
+            current.copy(
+                whatsAppSessionLink = sessionLink,
+                isWhatsAppEnabled = if (sessionLink.isNotBlank() && !current.isWhatsAppEnabled && current.whatsAppSessionLink.isEmpty()) true else current.isWhatsAppEnabled,
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+    }
+
+    fun onUpdateWhatsAppWebhookToken(webhookToken: String) {
+        _uiState.update { current ->
+            current.copy(
+                whatsAppWebhookToken = webhookToken,
+                isWhatsAppEnabled = if (webhookToken.isNotBlank() && !current.isWhatsAppEnabled && current.whatsAppWebhookToken.isEmpty()) true else current.isWhatsAppEnabled,
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+    }
+
+    fun onUpdateRestApiEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(isRestApiEnabled = enabled, isSettingsSaved = false, configSaveMessage = null) }
+    }
+
+    fun onUpdateRestApiPort(port: String) {
+        _uiState.update { it.copy(restApiPort = port, isSettingsSaved = false, configSaveMessage = null) }
     }
 
     fun onUpdateCustomModel(model: String) {
@@ -730,7 +904,12 @@ class ServerViewModel(
                             tunnelUrl = if (it.isPublicTunnelEnabled) "https://hermes-node.trycloudflare.com" else null
                         )
                     }
-                    onAddLog("Hermes Node daemon running on port 8000", LogLevel.INFO)
+                    val port = _uiState.value.restApiPort.toIntOrNull() ?: 8000
+                    if (_uiState.value.isRestApiEnabled) {
+                        onAddLog("Hermes Node daemon running on port $port", LogLevel.INFO)
+                    } else {
+                        onAddLog("Hermes Node daemon running (REST API disabled)", LogLevel.INFO)
+                    }
                     startMetricsMonitoring()
                 }
             }

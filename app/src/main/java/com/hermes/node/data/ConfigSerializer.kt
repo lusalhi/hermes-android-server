@@ -50,10 +50,36 @@ open class ConfigSerializer(
         root.put("provider", providerObj)
 
         val gatewaysObj = JSONObject()
+
         val telegramObj = JSONObject()
-        telegramObj.put("enabled", config.gateway.isTelegramEnabled)
-        telegramObj.put("bot_token", config.gateway.telegramToken)
+        telegramObj.put("enabled", config.gateway.telegram.enabled)
+        telegramObj.put("bot_token", config.gateway.telegram.botToken)
+        telegramObj.put("admin_user_ids", config.gateway.telegram.adminUserIds)
         gatewaysObj.put("telegram", telegramObj)
+
+        val discordObj = JSONObject()
+        discordObj.put("enabled", config.gateway.discord.enabled)
+        discordObj.put("bot_token", config.gateway.discord.botToken)
+        discordObj.put("channel_ids", config.gateway.discord.channelIds)
+        gatewaysObj.put("discord", discordObj)
+
+        val slackObj = JSONObject()
+        slackObj.put("enabled", config.gateway.slack.enabled)
+        slackObj.put("app_token", config.gateway.slack.appToken)
+        slackObj.put("bot_token", config.gateway.slack.botToken)
+        gatewaysObj.put("slack", slackObj)
+
+        val whatsAppObj = JSONObject()
+        whatsAppObj.put("enabled", config.gateway.whatsapp.enabled)
+        whatsAppObj.put("session_link", config.gateway.whatsapp.sessionLink)
+        whatsAppObj.put("webhook_token", config.gateway.whatsapp.webhookToken)
+        gatewaysObj.put("whatsapp", whatsAppObj)
+
+        val restApiObj = JSONObject()
+        restApiObj.put("enabled", config.gateway.restApi.enabled)
+        restApiObj.put("port", config.gateway.restApi.port)
+        gatewaysObj.put("rest_api", restApiObj)
+
         root.put("gateways", gatewaysObj)
 
         val systemObj = JSONObject()

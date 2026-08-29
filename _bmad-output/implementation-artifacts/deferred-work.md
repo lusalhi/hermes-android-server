@@ -16,3 +16,7 @@
 
 - **Child Node Subprocess CPU Tracking**: When running under restricted `/proc/stat` Android sandbox policies, `SystemTelemetryCollector.collectProcessCpuFallback()` measures host JVM CPU rather than child Node processes. Deferred as future enhancement for multi-process telemetry architecture.
 - **Adaptive Low Battery Styling**: Adding dynamic critical status color transitions and warning icons (`BatteryAlert`) when battery charge drops below 15-20% while discharging. Deferred as future UX enhancement.
+
+## Deferred from: code review of spec-5-1-multi-platform-messaging-gateway-adapters-telegram-discord-s.md (2026-08-29)
+
+- **Active Messaging Gateway Status Indicators on Dashboard**: Adding active gateway chip badges (Telegram, Discord, Slack, WhatsApp, REST API) to the Dashboard screen. Deferred to Epic 5.2 alongside Cloudflare Public Tunnel dashboard widgets.

@@ -25,17 +25,23 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AlternateEmail
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Numbers
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
@@ -59,7 +65,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,14 +99,31 @@ fun SettingsScreen(
     onDismissSaveMessage: () -> Unit = {},
     onRequestBatteryExemption: (() -> Unit)? = null,
     oemGuidanceUrl: String = "https://dontkillmyapp.com",
+    onUpdateTelegramEnabled: (Boolean) -> Unit = {},
+    onUpdateTelegramAdminUserIds: (String) -> Unit = {},
+    onUpdateDiscordEnabled: (Boolean) -> Unit = {},
+    onUpdateDiscordToken: (String) -> Unit = {},
+    onUpdateDiscordChannelIds: (String) -> Unit = {},
+    onUpdateSlackEnabled: (Boolean) -> Unit = {},
+    onUpdateSlackAppToken: (String) -> Unit = {},
+    onUpdateSlackBotToken: (String) -> Unit = {},
+    onUpdateWhatsAppEnabled: (Boolean) -> Unit = {},
+    onUpdateWhatsAppSessionLink: (String) -> Unit = {},
+    onUpdateWhatsAppWebhookToken: (String) -> Unit = {},
+    onUpdateRestApiEnabled: (Boolean) -> Unit = {},
+    onUpdateRestApiPort: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
     val context = LocalContext.current
 
-    var isApiKeyVisible by remember { mutableStateOf(false) }
-    var isTelegramTokenVisible by remember { mutableStateOf(false) }
-    var isProviderDropdownOpen by remember { mutableStateOf(false) }
+    var isApiKeyVisible by rememberSaveable { mutableStateOf(false) }
+    var isTelegramTokenVisible by rememberSaveable { mutableStateOf(false) }
+    var isDiscordTokenVisible by rememberSaveable { mutableStateOf(false) }
+    var isSlackAppTokenVisible by rememberSaveable { mutableStateOf(false) }
+    var isSlackBotTokenVisible by rememberSaveable { mutableStateOf(false) }
+    var isWhatsAppWebhookTokenVisible by rememberSaveable { mutableStateOf(false) }
+    var isProviderDropdownOpen by rememberSaveable { mutableStateOf(false) }
 
     val providers = listOf(
         "nous_portal" to "Nous Portal",
@@ -342,7 +365,15 @@ fun SettingsScreen(
             }
         }
 
-        // Messaging Gateways Card
+        // Messaging Gateways Section Header
+        Text(
+            text = "Messaging Gateways",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+
+        // 1. Telegram Gateway Card
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -353,51 +384,585 @@ fun SettingsScreen(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    text = "Messaging Gateways",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Telegram",
+                            tint = HermesCyan
+                        )
+                        Column {
+                            Text(
+                                text = "Telegram Gateway",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = "Telegram Bot integration with Admin IDs",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = state.isTelegramEnabled,
+                        onCheckedChange = onUpdateTelegramEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = HermesCyan
+                        )
+                    )
+                }
 
-                // Telegram Token
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column {
+                        Text(
+                            text = "Bot Token",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = state.telegramToken,
+                            onValueChange = onUpdateTelegramToken,
+                            placeholder = { Text("123456789:ABCdefGhIJKlmNoPQRstuv") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = null,
+                                    tint = HermesCyan
+                                )
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { isTelegramTokenVisible = !isTelegramTokenVisible }) {
+                                    Icon(
+                                        imageVector = if (isTelegramTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (isTelegramTokenVisible) "Hide Token" else "Show Token",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            visualTransformation = if (isTelegramTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = HermesCyan,
+                                unfocusedBorderColor = DarkBorder
+                            )
+                        )
+                    }
+
+                    Column {
+                        Text(
+                            text = "Allowed Admin User IDs",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = state.telegramAdminUserIds,
+                            onValueChange = onUpdateTelegramAdminUserIds,
+                            placeholder = { Text("e.g. 11111111, 22222222 (comma-separated)") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Tag,
+                                    contentDescription = null,
+                                    tint = HermesCyan
+                                )
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = HermesCyan,
+                                unfocusedBorderColor = DarkBorder
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2. Discord Gateway Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder))
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Forum,
+                            contentDescription = "Discord",
+                            tint = HermesCyan
+                        )
+                        Column {
+                            Text(
+                                text = "Discord Gateway",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = "Discord Bot and Channel adapter",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = state.isDiscordEnabled,
+                        onCheckedChange = onUpdateDiscordEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = HermesCyan
+                        )
+                    )
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column {
+                        Text(
+                            text = "Bot Token",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = state.discordToken,
+                            onValueChange = onUpdateDiscordToken,
+                            placeholder = { Text("Discord Bot Token (e.g. OTg3...)") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = null,
+                                    tint = HermesCyan
+                                )
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { isDiscordTokenVisible = !isDiscordTokenVisible }) {
+                                    Icon(
+                                        imageVector = if (isDiscordTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (isDiscordTokenVisible) "Hide Token" else "Show Token",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            visualTransformation = if (isDiscordTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = HermesCyan,
+                                unfocusedBorderColor = DarkBorder
+                            )
+                        )
+                    }
+
+                    Column {
+                        Text(
+                            text = "Allowed Channel IDs",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = state.discordChannelIds,
+                            onValueChange = onUpdateDiscordChannelIds,
+                            placeholder = { Text("e.g. 123456789012345678, 987654321098765432") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Numbers,
+                                    contentDescription = null,
+                                    tint = HermesCyan
+                                )
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = HermesCyan,
+                                unfocusedBorderColor = DarkBorder
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // 3. Slack Gateway Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder))
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AlternateEmail,
+                            contentDescription = "Slack",
+                            tint = HermesCyan
+                        )
+                        Column {
+                            Text(
+                                text = "Slack Gateway",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = "Slack Socket Mode & Bot User Tokens",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = state.isSlackEnabled,
+                        onCheckedChange = onUpdateSlackEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = HermesCyan
+                        )
+                    )
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column {
+                        Text(
+                            text = "App-Level Token (Socket Mode)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = state.slackAppToken,
+                            onValueChange = onUpdateSlackAppToken,
+                            placeholder = { Text("xapp-... (App Token)") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = null,
+                                    tint = HermesCyan
+                                )
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { isSlackAppTokenVisible = !isSlackAppTokenVisible }) {
+                                    Icon(
+                                        imageVector = if (isSlackAppTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (isSlackAppTokenVisible) "Hide Token" else "Show Token",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            visualTransformation = if (isSlackAppTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = HermesCyan,
+                                unfocusedBorderColor = DarkBorder
+                            )
+                        )
+                    }
+
+                    Column {
+                        Text(
+                            text = "Bot User OAuth Token",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = state.slackBotToken,
+                            onValueChange = onUpdateSlackBotToken,
+                            placeholder = { Text("xoxb-... (Bot Token)") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = null,
+                                    tint = HermesCyan
+                                )
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { isSlackBotTokenVisible = !isSlackBotTokenVisible }) {
+                                    Icon(
+                                        imageVector = if (isSlackBotTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (isSlackBotTokenVisible) "Hide Token" else "Show Token",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            visualTransformation = if (isSlackBotTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = HermesCyan,
+                                unfocusedBorderColor = DarkBorder
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // 4. WhatsApp Gateway Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder))
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhoneAndroid,
+                            contentDescription = "WhatsApp",
+                            tint = HermesCyan
+                        )
+                        Column {
+                            Text(
+                                text = "WhatsApp Gateway",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = "Session Link & Webhook Token",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = state.isWhatsAppEnabled,
+                        onCheckedChange = onUpdateWhatsAppEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = HermesCyan
+                        )
+                    )
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column {
+                        Text(
+                            text = "Session Link / Pairing Code",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = state.whatsAppSessionLink,
+                            onValueChange = onUpdateWhatsAppSessionLink,
+                            placeholder = { Text("https://wa.me/... or pairing code") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Link,
+                                    contentDescription = null,
+                                    tint = HermesCyan
+                                )
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = HermesCyan,
+                                unfocusedBorderColor = DarkBorder
+                            )
+                        )
+                    }
+
+                    Column {
+                        Text(
+                            text = "Webhook Secret Token",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = state.whatsAppWebhookToken,
+                            onValueChange = onUpdateWhatsAppWebhookToken,
+                            placeholder = { Text("Webhook verification token") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = null,
+                                    tint = HermesCyan
+                                )
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { isWhatsAppWebhookTokenVisible = !isWhatsAppWebhookTokenVisible }) {
+                                    Icon(
+                                        imageVector = if (isWhatsAppWebhookTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (isWhatsAppWebhookTokenVisible) "Hide Token" else "Show Token",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            visualTransformation = if (isWhatsAppWebhookTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = HermesCyan,
+                                unfocusedBorderColor = DarkBorder
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // 5. REST API & Local Web Server Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder))
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lan,
+                            contentDescription = "REST API",
+                            tint = HermesCyan
+                        )
+                        Column {
+                            Text(
+                                text = "REST API & Local Server",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = "Local HTTP webhook and API endpoint server",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = state.isRestApiEnabled,
+                        onCheckedChange = onUpdateRestApiEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = HermesCyan
+                        )
+                    )
+                }
+
                 Column {
+                    val portInt = state.restApiPort.trim().toIntOrNull()
+                    val isPortValid = state.restApiPort.isBlank() || (portInt != null && portInt in 1..65535)
+
                     Text(
-                        text = "Telegram Bot Token",
+                        text = "Port (Default: 8000)",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     OutlinedTextField(
-                        value = state.telegramToken,
-                        onValueChange = onUpdateTelegramToken,
-                        placeholder = { Text("123456789:ABCdefGhIJKlmNoPQRstuv") },
+                        value = state.restApiPort,
+                        onValueChange = onUpdateRestApiPort,
+                        placeholder = { Text("8000") },
                         leadingIcon = {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                imageVector = Icons.Default.Numbers,
                                 contentDescription = null,
                                 tint = HermesCyan
                             )
                         },
-                        trailingIcon = {
-                            IconButton(onClick = { isTelegramTokenVisible = !isTelegramTokenVisible }) {
-                                Icon(
-                                    imageVector = if (isTelegramTokenVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = if (isTelegramTokenVisible) "Hide Token" else "Show Token",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        },
-                        visualTransformation = if (isTelegramTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        isError = !isPortValid,
+                        supportingText = if (!isPortValid) {
+                            { Text("Valid port range: 1–65535", color = MaterialTheme.colorScheme.error) }
+                        } else null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = DarkSurface,
                             unfocusedContainerColor = DarkSurface,
-                            focusedBorderColor = HermesCyan,
-                            unfocusedBorderColor = DarkBorder
+                            focusedBorderColor = if (isPortValid) HermesCyan else MaterialTheme.colorScheme.error,
+                            unfocusedBorderColor = if (isPortValid) DarkBorder else MaterialTheme.colorScheme.error
                         )
                     )
                 }
