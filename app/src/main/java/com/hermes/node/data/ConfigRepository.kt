@@ -25,36 +25,36 @@ interface ConfigRepository {
     fun saveApiKey(apiKey: String)
     fun getTelegramToken(): String
     fun saveTelegramToken(token: String)
-    fun isTelegramEnabled(): Boolean = getTelegramToken().isNotBlank()
-    fun saveTelegramEnabled(enabled: Boolean) {}
-    fun getTelegramAdminUserIds(): String = ""
-    fun saveTelegramAdminUserIds(adminIds: String) {}
+    fun isTelegramEnabled(): Boolean
+    fun saveTelegramEnabled(enabled: Boolean)
+    fun getTelegramAdminUserIds(): String
+    fun saveTelegramAdminUserIds(adminIds: String)
 
-    fun isDiscordEnabled(): Boolean = false
-    fun saveDiscordEnabled(enabled: Boolean) {}
-    fun getDiscordToken(): String = ""
-    fun saveDiscordToken(token: String) {}
-    fun getDiscordChannelIds(): String = ""
-    fun saveDiscordChannelIds(channelIds: String) {}
+    fun isDiscordEnabled(): Boolean
+    fun saveDiscordEnabled(enabled: Boolean)
+    fun getDiscordToken(): String
+    fun saveDiscordToken(token: String)
+    fun getDiscordChannelIds(): String
+    fun saveDiscordChannelIds(channelIds: String)
 
-    fun isSlackEnabled(): Boolean = false
-    fun saveSlackEnabled(enabled: Boolean) {}
-    fun getSlackAppToken(): String = ""
-    fun saveSlackAppToken(token: String) {}
-    fun getSlackBotToken(): String = ""
-    fun saveSlackBotToken(token: String) {}
+    fun isSlackEnabled(): Boolean
+    fun saveSlackEnabled(enabled: Boolean)
+    fun getSlackAppToken(): String
+    fun saveSlackAppToken(token: String)
+    fun getSlackBotToken(): String
+    fun saveSlackBotToken(token: String)
 
-    fun isWhatsAppEnabled(): Boolean = false
-    fun saveWhatsAppEnabled(enabled: Boolean) {}
-    fun getWhatsAppSessionLink(): String = ""
-    fun saveWhatsAppSessionLink(sessionLink: String) {}
-    fun getWhatsAppWebhookToken(): String = ""
-    fun saveWhatsAppWebhookToken(token: String) {}
+    fun isWhatsAppEnabled(): Boolean
+    fun saveWhatsAppEnabled(enabled: Boolean)
+    fun getWhatsAppSessionLink(): String
+    fun saveWhatsAppSessionLink(sessionLink: String)
+    fun getWhatsAppWebhookToken(): String
+    fun saveWhatsAppWebhookToken(token: String)
 
-    fun isRestApiEnabled(): Boolean = true
-    fun saveRestApiEnabled(enabled: Boolean) {}
-    fun getRestApiPort(): Int = 8000
-    fun saveRestApiPort(port: Int) {}
+    fun isRestApiEnabled(): Boolean
+    fun saveRestApiEnabled(enabled: Boolean)
+    fun getRestApiPort(): Int
+    fun saveRestApiPort(port: Int)
 
     fun getCustomModel(): String
     fun saveCustomModel(model: String)
@@ -101,29 +101,20 @@ class EncryptedConfigRepository(
         const val KEY_PUBLIC_TUNNEL = "key_public_tunnel"
 
         fun create(context: Context): ConfigRepository {
-            return try {
-                val masterKey = MasterKey.Builder(context)
-                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                    .build()
+            // Fail closed: do not fall back to unencrypted storage.
+            // Callers should surface the error to the user rather than persisting secrets in plaintext.
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
 
-                val securePrefs = EncryptedSharedPreferences.create(
-                    context,
-                    PREFS_FILE,
-                    masterKey,
-                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-                )
-                EncryptedConfigRepository(securePrefs)
-            } catch (e: Exception) {
-                // Fallback to isolated unencrypted preferences if hardware Keystore is unavailable
-                try {
-                    android.util.Log.w("ConfigRepository", "Keystore initialization failed, falling back to isolated preferences: ${e.message}")
-                } catch (_: Throwable) {
-                    System.err.println("Keystore initialization failed, falling back to isolated preferences: ${e.message}")
-                }
-                val fallbackPrefs = context.getSharedPreferences(FALLBACK_PREFS_FILE, Context.MODE_PRIVATE)
-                EncryptedConfigRepository(fallbackPrefs)
-            }
+            val securePrefs = EncryptedSharedPreferences.create(
+                context,
+                PREFS_FILE,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+            return EncryptedConfigRepository(securePrefs)
         }
     }
 
@@ -189,8 +180,11 @@ class EncryptedConfigRepository(
                     webhookToken = prefs.getString(KEY_WHATSAPP_WEBHOOK_TOKEN, "") ?: ""
                 ),
                 restApi = RestApiGatewayConfig(
-                    enabled = prefs.getBoolean(KEY_REST_API_ENABLED, true),
-                    port = prefs.getInt(KEY_REST_API_PORT, 8000)
+                    enabled = try { prefs.getBoolean(KEY_REST_API_ENABLED, true) } catch (_: ClassCastException) { true },
+                    port = run {
+                        val raw = try { prefs.getInt(KEY_REST_API_PORT, 8000) } catch (_: ClassCastException) { 8000 }
+                        if (raw in 1..65535) raw else 8000
+                    }
                 )
             ),
             system = SystemConfig(
@@ -285,7 +279,10 @@ class EncryptedConfigRepository(
         prefs.edit().putBoolean(KEY_REST_API_ENABLED, enabled).apply()
     }
 
-    override fun getRestApiPort(): Int = prefs.getInt(KEY_REST_API_PORT, 8000)
+    override fun getRestApiPort(): Int {
+        val raw = try { prefs.getInt(KEY_REST_API_PORT, 8000) } catch (_: ClassCastException) { 8000 }
+        return if (raw in 1..65535) raw else 8000
+    }
     override fun saveRestApiPort(port: Int) {
         prefs.edit().putInt(KEY_REST_API_PORT, port).apply()
     }

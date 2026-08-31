@@ -20,3 +20,5 @@
 ## Deferred from: code review of spec-5-1-multi-platform-messaging-gateway-adapters-telegram-discord-s.md (2026-08-29)
 
 - **Active Messaging Gateway Status Indicators on Dashboard**: Adding active gateway chip badges (Telegram, Discord, Slack, WhatsApp, REST API) to the Dashboard screen. Deferred to Epic 5.2 alongside Cloudflare Public Tunnel dashboard widgets.
+- **Runtime JSON schema not contract-tested against daemon**: `ConfigSerializer.generateJson` gateway schema (`telegram`, `discord`, `slack`, `whatsapp`, `rest_api`) is only asserted by Android unit tests; add daemon-consumed fixture/contract test to catch drift [ConfigSerializer.kt:51-83] — deferred from 2026-08-29 review.
+- **Epic context adapter lifecycle clarification**: Context describes “gateway adapters” but diff implements config/serialization/UI without adapter lifecycle or connection-state; clarify docs that adapters are daemon-provided or add observable status seam in Epic 5.2 [epic-5-context.md:9-22] — deferred from 2026-08-29 review.

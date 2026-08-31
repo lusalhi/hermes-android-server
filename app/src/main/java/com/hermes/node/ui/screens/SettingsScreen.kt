@@ -122,6 +122,7 @@ fun SettingsScreen(
     var isDiscordTokenVisible by rememberSaveable { mutableStateOf(false) }
     var isSlackAppTokenVisible by rememberSaveable { mutableStateOf(false) }
     var isSlackBotTokenVisible by rememberSaveable { mutableStateOf(false) }
+    var isWhatsAppSessionLinkVisible by rememberSaveable { mutableStateOf(false) }
     var isWhatsAppWebhookTokenVisible by rememberSaveable { mutableStateOf(false) }
     var isProviderDropdownOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -453,13 +454,17 @@ fun SettingsScreen(
                             visualTransformation = if (isTelegramTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             singleLine = true,
+                            isError = state.isTelegramEnabled && state.telegramToken.isBlank(),
+                            supportingText = if (state.isTelegramEnabled && state.telegramToken.isBlank()) {
+                                { Text("Bot token required when Telegram is enabled", color = MaterialTheme.colorScheme.error) }
+                            } else null,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = DarkSurface,
                                 unfocusedContainerColor = DarkSurface,
-                                focusedBorderColor = HermesCyan,
-                                unfocusedBorderColor = DarkBorder
+                                focusedBorderColor = if (state.isTelegramEnabled && state.telegramToken.isBlank()) MaterialTheme.colorScheme.error else HermesCyan,
+                                unfocusedBorderColor = if (state.isTelegramEnabled && state.telegramToken.isBlank()) MaterialTheme.colorScheme.error else DarkBorder
                             )
                         )
                     }
@@ -577,13 +582,17 @@ fun SettingsScreen(
                             visualTransformation = if (isDiscordTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             singleLine = true,
+                            isError = state.isDiscordEnabled && state.discordToken.isBlank(),
+                            supportingText = if (state.isDiscordEnabled && state.discordToken.isBlank()) {
+                                { Text("Bot token required when Discord is enabled", color = MaterialTheme.colorScheme.error) }
+                            } else null,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = DarkSurface,
                                 unfocusedContainerColor = DarkSurface,
-                                focusedBorderColor = HermesCyan,
-                                unfocusedBorderColor = DarkBorder
+                                focusedBorderColor = if (state.isDiscordEnabled && state.discordToken.isBlank()) MaterialTheme.colorScheme.error else HermesCyan,
+                                unfocusedBorderColor = if (state.isDiscordEnabled && state.discordToken.isBlank()) MaterialTheme.colorScheme.error else DarkBorder
                             )
                         )
                     }
@@ -701,13 +710,17 @@ fun SettingsScreen(
                             visualTransformation = if (isSlackAppTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             singleLine = true,
+                            isError = state.isSlackEnabled && state.slackAppToken.isBlank(),
+                            supportingText = if (state.isSlackEnabled && state.slackAppToken.isBlank()) {
+                                { Text("App token required when Slack is enabled", color = MaterialTheme.colorScheme.error) }
+                            } else null,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = DarkSurface,
                                 unfocusedContainerColor = DarkSurface,
-                                focusedBorderColor = HermesCyan,
-                                unfocusedBorderColor = DarkBorder
+                                focusedBorderColor = if (state.isSlackEnabled && state.slackAppToken.isBlank()) MaterialTheme.colorScheme.error else HermesCyan,
+                                unfocusedBorderColor = if (state.isSlackEnabled && state.slackAppToken.isBlank()) MaterialTheme.colorScheme.error else DarkBorder
                             )
                         )
                     }
@@ -742,13 +755,17 @@ fun SettingsScreen(
                             visualTransformation = if (isSlackBotTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             singleLine = true,
+                            isError = state.isSlackEnabled && state.slackBotToken.isBlank(),
+                            supportingText = if (state.isSlackEnabled && state.slackBotToken.isBlank()) {
+                                { Text("Bot token required when Slack is enabled", color = MaterialTheme.colorScheme.error) }
+                            } else null,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = DarkSurface,
                                 unfocusedContainerColor = DarkSurface,
-                                focusedBorderColor = HermesCyan,
-                                unfocusedBorderColor = DarkBorder
+                                focusedBorderColor = if (state.isSlackEnabled && state.slackBotToken.isBlank()) MaterialTheme.colorScheme.error else HermesCyan,
+                                unfocusedBorderColor = if (state.isSlackEnabled && state.slackBotToken.isBlank()) MaterialTheme.colorScheme.error else DarkBorder
                             )
                         )
                     }
@@ -824,14 +841,29 @@ fun SettingsScreen(
                                     tint = HermesCyan
                                 )
                             },
+                            trailingIcon = {
+                                IconButton(onClick = { isWhatsAppSessionLinkVisible = !isWhatsAppSessionLinkVisible }) {
+                                    Icon(
+                                        imageVector = if (isWhatsAppSessionLinkVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (isWhatsAppSessionLinkVisible) "Hide Session Link" else "Show Session Link",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            visualTransformation = if (isWhatsAppSessionLinkVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             singleLine = true,
+                            isError = state.isWhatsAppEnabled && state.whatsAppSessionLink.isBlank(),
+                            supportingText = if (state.isWhatsAppEnabled && state.whatsAppSessionLink.isBlank()) {
+                                { Text("Session link required when WhatsApp is enabled", color = MaterialTheme.colorScheme.error) }
+                            } else null,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = DarkSurface,
                                 unfocusedContainerColor = DarkSurface,
-                                focusedBorderColor = HermesCyan,
-                                unfocusedBorderColor = DarkBorder
+                                focusedBorderColor = if (state.isWhatsAppEnabled && state.whatsAppSessionLink.isBlank()) MaterialTheme.colorScheme.error else HermesCyan,
+                                unfocusedBorderColor = if (state.isWhatsAppEnabled && state.whatsAppSessionLink.isBlank()) MaterialTheme.colorScheme.error else DarkBorder
                             )
                         )
                     }
@@ -866,13 +898,17 @@ fun SettingsScreen(
                             visualTransformation = if (isWhatsAppWebhookTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             singleLine = true,
+                            isError = state.isWhatsAppEnabled && state.whatsAppWebhookToken.isBlank(),
+                            supportingText = if (state.isWhatsAppEnabled && state.whatsAppWebhookToken.isBlank()) {
+                                { Text("Webhook token required when WhatsApp is enabled", color = MaterialTheme.colorScheme.error) }
+                            } else null,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = DarkSurface,
                                 unfocusedContainerColor = DarkSurface,
-                                focusedBorderColor = HermesCyan,
-                                unfocusedBorderColor = DarkBorder
+                                focusedBorderColor = if (state.isWhatsAppEnabled && state.whatsAppWebhookToken.isBlank()) MaterialTheme.colorScheme.error else HermesCyan,
+                                unfocusedBorderColor = if (state.isWhatsAppEnabled && state.whatsAppWebhookToken.isBlank()) MaterialTheme.colorScheme.error else DarkBorder
                             )
                         )
                     }

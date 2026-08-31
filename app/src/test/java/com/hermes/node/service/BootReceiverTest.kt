@@ -224,6 +224,32 @@ class BootReceiverTest {
         override fun saveApiKey(apiKey: String) {}
         override fun getTelegramToken(): String = ""
         override fun saveTelegramToken(token: String) {}
+        override fun isTelegramEnabled(): Boolean = false
+        override fun saveTelegramEnabled(enabled: Boolean) {}
+        override fun getTelegramAdminUserIds(): String = ""
+        override fun saveTelegramAdminUserIds(adminIds: String) {}
+        override fun isDiscordEnabled(): Boolean = false
+        override fun saveDiscordEnabled(enabled: Boolean) {}
+        override fun getDiscordToken(): String = ""
+        override fun saveDiscordToken(token: String) {}
+        override fun getDiscordChannelIds(): String = ""
+        override fun saveDiscordChannelIds(channelIds: String) {}
+        override fun isSlackEnabled(): Boolean = false
+        override fun saveSlackEnabled(enabled: Boolean) {}
+        override fun getSlackAppToken(): String = ""
+        override fun saveSlackAppToken(token: String) {}
+        override fun getSlackBotToken(): String = ""
+        override fun saveSlackBotToken(token: String) {}
+        override fun isWhatsAppEnabled(): Boolean = false
+        override fun saveWhatsAppEnabled(enabled: Boolean) {}
+        override fun getWhatsAppSessionLink(): String = ""
+        override fun saveWhatsAppSessionLink(sessionLink: String) {}
+        override fun getWhatsAppWebhookToken(): String = ""
+        override fun saveWhatsAppWebhookToken(token: String) {}
+        override fun isRestApiEnabled(): Boolean = true
+        override fun saveRestApiEnabled(enabled: Boolean) {}
+        override fun getRestApiPort(): Int = 8000
+        override fun saveRestApiPort(port: Int) {}
         override fun getCustomModel(): String = ""
         override fun saveCustomModel(model: String) {}
         override fun getCustomBaseUrl(): String = ""

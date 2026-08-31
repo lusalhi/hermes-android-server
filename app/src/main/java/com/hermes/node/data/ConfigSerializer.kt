@@ -77,7 +77,8 @@ open class ConfigSerializer(
 
         val restApiObj = JSONObject()
         restApiObj.put("enabled", config.gateway.restApi.enabled)
-        restApiObj.put("port", config.gateway.restApi.port)
+        val sanitizedPort = config.gateway.restApi.port.takeIf { it in 1..65535 } ?: 8000
+        restApiObj.put("port", sanitizedPort)
         gatewaysObj.put("rest_api", restApiObj)
 
         root.put("gateways", gatewaysObj)
@@ -116,8 +117,10 @@ open class ConfigSerializer(
                 }
             }
 
-            // Apply POSIX 0600 permissions to temp staging file
-            applyPosix0600Permissions(tempFile)
+            // Apply POSIX 0600 permissions to temp staging file — fail closed on permission error
+            if (!applyPosix0600Permissions(tempFile)) {
+                throw IOException("Failed to set strict POSIX 0600 permissions on staging file: ${tempFile.absolutePath}")
+            }
 
             // Atomically replace destination
             val sourcePath = tempFile.toPath()
@@ -129,8 +132,10 @@ open class ConfigSerializer(
                 Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING)
             }
 
-            // Ensure POSIX 0600 permissions on destination file
-            applyPosix0600Permissions(configFile)
+            // Ensure POSIX 0600 permissions on destination file — fail closed on permission error
+            if (!applyPosix0600Permissions(configFile)) {
+                throw IOException("Failed to set strict POSIX 0600 permissions on ${configFile.absolutePath}")
+            }
 
             configFile
         } catch (e: Exception) {

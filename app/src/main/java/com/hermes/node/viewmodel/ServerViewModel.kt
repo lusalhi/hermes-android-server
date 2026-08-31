@@ -410,23 +410,23 @@ class ServerViewModel(
                     showBatteryOptimizationPrompt = if (shouldPrompt) true else it.showBatteryOptimizationPrompt
                 )
             }
-            val port = _uiState.value.restApiPort.toIntOrNull() ?: 8000
+            val port = _uiState.value.restApiPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 8000
             if (_uiState.value.isRestApiEnabled) {
                 onAddLog("Hermes Node daemon running on port $port", LogLevel.INFO)
             } else {
                 onAddLog("Hermes Node daemon running (REST API disabled)", LogLevel.INFO)
             }
             if (_uiState.value.isTelegramEnabled && _uiState.value.telegramToken.isNotBlank()) {
-                onAddLog("Telegram Gateway connected successfully.", LogLevel.INFO)
+                onAddLog("Telegram Gateway configured and enabled.", LogLevel.INFO)
             }
             if (_uiState.value.isDiscordEnabled && _uiState.value.discordToken.isNotBlank()) {
-                onAddLog("Discord Gateway connected successfully.", LogLevel.INFO)
+                onAddLog("Discord Gateway configured and enabled.", LogLevel.INFO)
             }
-            if (_uiState.value.isSlackEnabled && (_uiState.value.slackAppToken.isNotBlank() || _uiState.value.slackBotToken.isNotBlank())) {
-                onAddLog("Slack Gateway connected successfully.", LogLevel.INFO)
+            if (_uiState.value.isSlackEnabled && _uiState.value.slackAppToken.isNotBlank() && _uiState.value.slackBotToken.isNotBlank()) {
+                onAddLog("Slack Gateway configured and enabled.", LogLevel.INFO)
             }
-            if (_uiState.value.isWhatsAppEnabled && (_uiState.value.whatsAppSessionLink.isNotBlank() || _uiState.value.whatsAppWebhookToken.isNotBlank())) {
-                onAddLog("WhatsApp Gateway connected successfully.", LogLevel.INFO)
+            if (_uiState.value.isWhatsAppEnabled && _uiState.value.whatsAppSessionLink.isNotBlank() && _uiState.value.whatsAppWebhookToken.isNotBlank()) {
+                onAddLog("WhatsApp Gateway configured and enabled.", LogLevel.INFO)
             }
             startMetricsMonitoring()
         }
@@ -617,12 +617,27 @@ class ServerViewModel(
             )
 
             try {
-                // 1. Save to ConfigRepository (Keystore-backed EncryptedSharedPreferences)
-                configRepository?.saveConfig(config)
+                // Fail closed if persistence dependencies are unavailable
+                if (configRepository == null || configSerializer == null) {
+                    val missing = buildList {
+                        if (configRepository == null) add("ConfigRepository")
+                        if (configSerializer == null) add("ConfigSerializer")
+                    }.joinToString(" and ")
+                    val error = "Storage unavailable: $missing not initialized"
+                    _uiState.update {
+                        it.copy(
+                            isSavingSettings = false,
+                            isSettingsSaved = false,
+                            configSaveMessage = error
+                        )
+                    }
+                    onAddLog(error, LogLevel.ERROR)
+                    return@launch
+                }
 
-                // 2. Atomically serialize to hermes.json with POSIX 0600 permissions
-                val result = configSerializer?.serialize(config)
-                if (result != null && result.isFailure) {
+                // 1. Atomically serialize to hermes.json first — fail closed before committing prefs
+                val result = configSerializer.serialize(config)
+                if (result.isFailure) {
                     val error = result.exceptionOrNull()?.message ?: "Failed to write configuration"
                     _uiState.update {
                         it.copy(
@@ -634,6 +649,9 @@ class ServerViewModel(
                     onAddLog("Error saving runtime configuration: $error", LogLevel.ERROR)
                     return@launch
                 }
+
+                // 2. Save to ConfigRepository only after file success (prevents prefs/file divergence)
+                configRepository.saveConfig(config)
 
                 _uiState.update {
                     it.copy(
@@ -683,7 +701,6 @@ class ServerViewModel(
         _uiState.update { current ->
             current.copy(
                 telegramToken = token,
-                isTelegramEnabled = if (token.isNotBlank() && !current.isTelegramEnabled && current.telegramToken.isEmpty()) true else current.isTelegramEnabled,
                 isSettingsSaved = false,
                 configSaveMessage = null
             )
@@ -702,7 +719,6 @@ class ServerViewModel(
         _uiState.update { current ->
             current.copy(
                 discordToken = token,
-                isDiscordEnabled = if (token.isNotBlank() && !current.isDiscordEnabled && current.discordToken.isEmpty()) true else current.isDiscordEnabled,
                 isSettingsSaved = false,
                 configSaveMessage = null
             )
@@ -721,7 +737,6 @@ class ServerViewModel(
         _uiState.update { current ->
             current.copy(
                 slackAppToken = appToken,
-                isSlackEnabled = if (appToken.isNotBlank() && !current.isSlackEnabled && current.slackAppToken.isEmpty()) true else current.isSlackEnabled,
                 isSettingsSaved = false,
                 configSaveMessage = null
             )
@@ -732,7 +747,6 @@ class ServerViewModel(
         _uiState.update { current ->
             current.copy(
                 slackBotToken = botToken,
-                isSlackEnabled = if (botToken.isNotBlank() && !current.isSlackEnabled && current.slackBotToken.isEmpty()) true else current.isSlackEnabled,
                 isSettingsSaved = false,
                 configSaveMessage = null
             )
@@ -747,7 +761,6 @@ class ServerViewModel(
         _uiState.update { current ->
             current.copy(
                 whatsAppSessionLink = sessionLink,
-                isWhatsAppEnabled = if (sessionLink.isNotBlank() && !current.isWhatsAppEnabled && current.whatsAppSessionLink.isEmpty()) true else current.isWhatsAppEnabled,
                 isSettingsSaved = false,
                 configSaveMessage = null
             )
@@ -758,7 +771,6 @@ class ServerViewModel(
         _uiState.update { current ->
             current.copy(
                 whatsAppWebhookToken = webhookToken,
-                isWhatsAppEnabled = if (webhookToken.isNotBlank() && !current.isWhatsAppEnabled && current.whatsAppWebhookToken.isEmpty()) true else current.isWhatsAppEnabled,
                 isSettingsSaved = false,
                 configSaveMessage = null
             )
@@ -904,7 +916,7 @@ class ServerViewModel(
                             tunnelUrl = if (it.isPublicTunnelEnabled) "https://hermes-node.trycloudflare.com" else null
                         )
                     }
-                    val port = _uiState.value.restApiPort.toIntOrNull() ?: 8000
+                    val port = _uiState.value.restApiPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 8000
                     if (_uiState.value.isRestApiEnabled) {
                         onAddLog("Hermes Node daemon running on port $port", LogLevel.INFO)
                     } else {

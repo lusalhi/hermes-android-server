@@ -123,12 +123,13 @@ class ServerViewModelTest {
 
     @Test
     fun onStartServer_withTelegramToken_logsGatewayConnection() = runTest(testDispatcher) {
+        viewModel.onUpdateTelegramEnabled(true)
         viewModel.onUpdateTelegramToken("123456:ABC-DEF")
         viewModel.onStartServer()
         advanceTimeBy(650)
 
         assertTrue(viewModel.uiState.value.logs.any {
-            it.message.contains("Telegram Gateway connected successfully")
+            it.message.contains("Telegram Gateway configured and enabled")
         })
 
         viewModel.stopMonitoring()
@@ -771,8 +772,14 @@ class ServerViewModelTest {
     fun onDismissSaveMessage_resetsSaveStatusAndMessage() = runTest(testDispatcher) {
         val fakePrefs = FakeSharedPreferences()
         val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_dismiss_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
         val vm = ServerViewModel(
             configRepository = repository,
+            configSerializer = serializer,
             defaultDispatcher = testDispatcher,
             ioDispatcher = testDispatcher
         )
@@ -785,6 +792,7 @@ class ServerViewModelTest {
         assertFalse(vm.uiState.value.isSettingsSaved)
         assertNull(vm.uiState.value.configSaveMessage)
 
+        tempDir.deleteRecursively()
         vm.stopMonitoring()
     }
 
@@ -792,8 +800,14 @@ class ServerViewModelTest {
     fun onUpdateSettings_resetsSavedStateAndMessage() = runTest(testDispatcher) {
         val fakePrefs = FakeSharedPreferences()
         val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_update_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
         val vm = ServerViewModel(
             configRepository = repository,
+            configSerializer = serializer,
             defaultDispatcher = testDispatcher,
             ioDispatcher = testDispatcher
         )
@@ -806,6 +820,7 @@ class ServerViewModelTest {
         assertFalse(vm.uiState.value.isSettingsSaved)
         assertNull(vm.uiState.value.configSaveMessage)
 
+        tempDir.deleteRecursively()
         vm.stopMonitoring()
     }
 
