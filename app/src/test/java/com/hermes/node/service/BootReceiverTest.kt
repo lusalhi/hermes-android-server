@@ -5,6 +5,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import com.hermes.node.data.ConfigRepository
 import com.hermes.node.data.model.HermesConfig
+import com.hermes.node.data.model.SkillsConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -260,5 +261,9 @@ class BootReceiverTest {
         }
         override fun isPublicTunnelEnabled(): Boolean = false
         override fun savePublicTunnel(enabled: Boolean) {}
+        override fun getSkillsConfig(): SkillsConfig = SkillsConfig()
+        override fun saveSkillsConfig(skills: SkillsConfig) {}
+        override fun isSkillEnabled(skillId: String): Boolean = true
+        override fun saveSkillEnabled(skillId: String, enabled: Boolean) {}
     }
 }

@@ -8,6 +8,7 @@ import com.hermes.node.data.FakeSharedPreferences
 import com.hermes.node.data.model.GatewayConfig
 import com.hermes.node.data.model.HermesConfig
 import com.hermes.node.data.model.ProviderConfig
+import com.hermes.node.data.model.SkillsConfig
 import com.hermes.node.data.model.SystemConfig
 import com.hermes.node.engine.DeviceTelemetry
 import com.hermes.node.engine.TelemetryCollector
@@ -1940,6 +1941,265 @@ class ServerViewModelTest {
         assertFalse(vm.uiState.value.showQrCodeDialog)
         assertNull(vm.uiState.value.tunnelUrl)
         assertTrue(vm.uiState.value.tunnelState is TunnelState.Error)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onToggleSkill_disablingSkill_updatesUiStateAndPersistsToDiskAndRepo() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_skills_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        // Initial default: all enabled
+        assertTrue(vm.uiState.value.skillsConfig.bashRunner)
+        assertTrue(vm.uiState.value.installedSkills.first { it.id == SkillsConfig.SKILL_BASH_RUNNER }.enabled)
+
+        // Toggle bash_runner OFF
+        vm.onToggleSkill(SkillsConfig.SKILL_BASH_RUNNER, false)
+
+        // UI state immediately updated
+        assertFalse(vm.uiState.value.skillsConfig.bashRunner)
+        assertFalse(vm.uiState.value.installedSkills.first { it.id == SkillsConfig.SKILL_BASH_RUNNER }.enabled)
+
+        testScheduler.advanceUntilIdle()
+
+        // Persisted to EncryptedSharedPreferences repository
+        assertFalse(repository.isSkillEnabled(SkillsConfig.SKILL_BASH_RUNNER))
+        assertFalse(repository.getSkillsConfig().bashRunner)
+
+        // Persisted to hermes.json with 0600 permissions
+        assertTrue(configFile.exists())
+        val json = org.json.JSONObject(configFile.readText(Charsets.UTF_8))
+        assertTrue(json.has("skills"))
+        assertFalse(json.getJSONObject("skills").getBoolean("bash_runner"))
+        assertTrue(json.getJSONObject("skills").getBoolean("web_search"))
+        assertTrue(vm.uiState.value.logs.any { it.message.contains("Skill 'bash_runner' disabled") })
+
+        tempDir.deleteRecursively()
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onToggleSkill_enablingSkill_updatesUiStateAndPersists() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        repository.saveSkillEnabled(SkillsConfig.SKILL_WEB_SEARCH, false)
+
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_skills_enable_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        // Verify loaded as false
+        assertFalse(vm.uiState.value.skillsConfig.webSearch)
+
+        // Toggle web_search ON
+        vm.onToggleSkill(SkillsConfig.SKILL_WEB_SEARCH, true)
+
+        assertTrue(vm.uiState.value.skillsConfig.webSearch)
+        assertTrue(vm.uiState.value.installedSkills.first { it.id == SkillsConfig.SKILL_WEB_SEARCH }.enabled)
+
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(repository.isSkillEnabled(SkillsConfig.SKILL_WEB_SEARCH))
+        val json = org.json.JSONObject(configFile.readText(Charsets.UTF_8))
+        assertTrue(json.getJSONObject("skills").getBoolean("web_search"))
+
+        tempDir.deleteRecursively()
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onToggleSkill_duringRunningServer_daemonRemainsRunning() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_skills_running_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+
+        // Toggle skill while running
+        vm.onToggleSkill(SkillsConfig.SKILL_CRON_SCHEDULER, false)
+        runCurrent()
+        advanceTimeBy(100)
+
+        // Server remains RUNNING uninterrupted
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+        assertFalse(vm.uiState.value.skillsConfig.cronScheduler)
+
+        val json = org.json.JSONObject(configFile.readText(Charsets.UTF_8))
+        assertFalse(json.getJSONObject("skills").getBoolean("cron_scheduler"))
+
+        tempDir.deleteRecursively()
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onToggleSkill_whenSerializationFails_revertsUiStateAndSurfacesError() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val invalidFile = File(System.getProperty("java.io.tmpdir") ?: "/tmp")
+        val brokenSerializer = object : ConfigSerializer(invalidFile) {
+            override fun serialize(config: HermesConfig): Result<File> {
+                return Result.failure(java.io.IOException("Disk full during skill update"))
+            }
+        }
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = brokenSerializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        // Initial state is true
+        assertTrue(vm.uiState.value.skillsConfig.fileManager)
+
+        // Toggle file_manager to false
+        vm.onToggleSkill(SkillsConfig.SKILL_FILE_MANAGER, false)
+
+        testScheduler.advanceUntilIdle()
+
+        // State reverted back to true
+        assertTrue(vm.uiState.value.skillsConfig.fileManager)
+        assertTrue(vm.uiState.value.installedSkills.first { it.id == SkillsConfig.SKILL_FILE_MANAGER }.enabled)
+        assertTrue(vm.uiState.value.configSaveMessage?.contains("Disk full during skill update") == true)
+        assertTrue(vm.uiState.value.logs.any { it.level == LogLevel.ERROR && it.message.contains("Failed to serialize skill configuration") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onToggleSkill_customSkill_updatesCustomSkillsMapAndPersists() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_custom_skill_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onToggleSkill("pdf_converter", true)
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.skillsConfig.customSkills["pdf_converter"] == true)
+        assertTrue(vm.uiState.value.installedSkills.any { it.id == "pdf_converter" && it.enabled })
+        assertTrue(repository.isSkillEnabled("pdf_converter"))
+
+        val json = org.json.JSONObject(configFile.readText(Charsets.UTF_8))
+        assertTrue(json.getJSONObject("skills").getBoolean("pdf_converter"))
+
+        tempDir.deleteRecursively()
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun loadPersistedConfig_populatesSkillsInUiState() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        repository.saveSkillsConfig(
+            SkillsConfig(
+                webSearch = true,
+                fileManager = false,
+                bashRunner = false,
+                cronScheduler = true
+            )
+        )
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        val state = vm.uiState.value
+        assertTrue(state.skillsConfig.webSearch)
+        assertFalse(state.skillsConfig.fileManager)
+        assertFalse(state.skillsConfig.bashRunner)
+        assertTrue(state.skillsConfig.cronScheduler)
+
+        val bashSkill = state.installedSkills.first { it.id == SkillsConfig.SKILL_BASH_RUNNER }
+        assertFalse(bashSkill.enabled)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onToggleSkill_multipleTogglesInSequence_persistsAllCorrectly() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_skills_seq_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        // Toggle multiple skills in rapid succession
+        vm.onToggleSkill(SkillsConfig.SKILL_WEB_SEARCH, false)
+        vm.onToggleSkill(SkillsConfig.SKILL_BASH_RUNNER, false)
+        vm.onToggleSkill(SkillsConfig.SKILL_CRON_SCHEDULER, false)
+
+        testScheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.skillsConfig.webSearch)
+        assertFalse(vm.uiState.value.skillsConfig.bashRunner)
+        assertFalse(vm.uiState.value.skillsConfig.cronScheduler)
+        assertTrue(vm.uiState.value.skillsConfig.fileManager)
+
+        val retrievedSkills = repository.getSkillsConfig()
+        assertFalse(retrievedSkills.webSearch)
+        assertFalse(retrievedSkills.bashRunner)
+        assertFalse(retrievedSkills.cronScheduler)
+        assertTrue(retrievedSkills.fileManager)
+
+        val json = org.json.JSONObject(configFile.readText(Charsets.UTF_8))
+        val skillsJson = json.getJSONObject("skills")
+        assertFalse(skillsJson.getBoolean("web_search"))
+        assertFalse(skillsJson.getBoolean("bash_runner"))
+        assertFalse(skillsJson.getBoolean("cron_scheduler"))
+        assertTrue(skillsJson.getBoolean("file_manager"))
+
+        tempDir.deleteRecursively()
         vm.stopMonitoring()
     }
 

@@ -1,6 +1,15 @@
 package com.hermes.node.data
 
+import com.hermes.node.data.model.DiscordGatewayConfig
+import com.hermes.node.data.model.GatewayConfig
 import com.hermes.node.data.model.HermesConfig
+import com.hermes.node.data.model.ProviderConfig
+import com.hermes.node.data.model.RestApiGatewayConfig
+import com.hermes.node.data.model.SkillsConfig
+import com.hermes.node.data.model.SlackGatewayConfig
+import com.hermes.node.data.model.SystemConfig
+import com.hermes.node.data.model.TelegramGatewayConfig
+import com.hermes.node.data.model.WhatsAppGatewayConfig
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -88,7 +97,127 @@ open class ConfigSerializer(
         systemObj.put("public_tunnel", config.system.publicTunnelEnabled)
         root.put("system", systemObj)
 
+        val skillsObj = JSONObject()
+        skillsObj.put(SkillsConfig.SKILL_WEB_SEARCH, config.skills.webSearch)
+        skillsObj.put(SkillsConfig.SKILL_FILE_MANAGER, config.skills.fileManager)
+        skillsObj.put(SkillsConfig.SKILL_BASH_RUNNER, config.skills.bashRunner)
+        skillsObj.put(SkillsConfig.SKILL_CRON_SCHEDULER, config.skills.cronScheduler)
+        for ((customId, customEnabled) in config.skills.customSkills) {
+            if (customId !in SkillsConfig.CORE_SKILL_IDS) {
+                skillsObj.put(customId, customEnabled)
+            }
+        }
+        root.put("skills", skillsObj)
+
         return root.toString(2)
+    }
+
+    open fun parseJson(jsonString: String): HermesConfig {
+        if (jsonString.isBlank()) return HermesConfig()
+        val root = JSONObject(jsonString)
+
+        val providerConfig = if (root.has("provider")) {
+            val pObj = root.optJSONObject("provider")
+            if (pObj != null) {
+                ProviderConfig(
+                    provider = pObj.optString("name", "nous_portal"),
+                    apiKey = pObj.optString("api_key", ""),
+                    model = pObj.optString("model", ""),
+                    baseUrl = pObj.optString("base_url", "")
+                )
+            } else ProviderConfig()
+        } else ProviderConfig()
+
+        val gatewayConfig = if (root.has("gateways")) {
+            val gObj = root.optJSONObject("gateways")
+            if (gObj != null) {
+                val tg = gObj.optJSONObject("telegram")
+                val disc = gObj.optJSONObject("discord")
+                val sl = gObj.optJSONObject("slack")
+                val wa = gObj.optJSONObject("whatsapp")
+                val rest = gObj.optJSONObject("rest_api")
+
+                GatewayConfig(
+                    telegram = TelegramGatewayConfig(
+                        enabled = tg?.optBoolean("enabled", false) ?: false,
+                        botToken = tg?.optString("bot_token", "") ?: "",
+                        adminUserIds = tg?.optString("admin_user_ids", "") ?: ""
+                    ),
+                    discord = DiscordGatewayConfig(
+                        enabled = disc?.optBoolean("enabled", false) ?: false,
+                        botToken = disc?.optString("bot_token", "") ?: "",
+                        channelIds = disc?.optString("channel_ids", "") ?: ""
+                    ),
+                    slack = SlackGatewayConfig(
+                        enabled = sl?.optBoolean("enabled", false) ?: false,
+                        appToken = sl?.optString("app_token", "") ?: "",
+                        botToken = sl?.optString("bot_token", "") ?: ""
+                    ),
+                    whatsapp = WhatsAppGatewayConfig(
+                        enabled = wa?.optBoolean("enabled", false) ?: false,
+                        sessionLink = wa?.optString("session_link", "") ?: "",
+                        webhookToken = wa?.optString("webhook_token", "") ?: ""
+                    ),
+                    restApi = RestApiGatewayConfig(
+                        enabled = rest?.optBoolean("enabled", true) ?: true,
+                        port = rest?.optInt("port", 8000)?.takeIf { it in 1..65535 } ?: 8000
+                    )
+                )
+            } else GatewayConfig()
+        } else GatewayConfig()
+
+        val systemConfig = if (root.has("system")) {
+            val sObj = root.optJSONObject("system")
+            if (sObj != null) {
+                SystemConfig(
+                    autoStartOnBoot = sObj.optBoolean("auto_start", false),
+                    publicTunnelEnabled = sObj.optBoolean("public_tunnel", false)
+                )
+            } else SystemConfig()
+        } else SystemConfig()
+
+        val skillsConfig = if (root.has("skills")) {
+            val sObj = root.optJSONObject("skills")
+            if (sObj != null) {
+                val customMap = mutableMapOf<String, Boolean>()
+                val keys = sObj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    if (key !in SkillsConfig.CORE_SKILL_IDS) {
+                        val rawVal = sObj.opt(key)
+                        if (rawVal is Boolean) {
+                            customMap[key] = rawVal
+                        } else if (rawVal is String && (rawVal.equals("true", ignoreCase = true) || rawVal.equals("false", ignoreCase = true))) {
+                            customMap[key] = rawVal.toBoolean()
+                        }
+                    }
+                }
+                SkillsConfig(
+                    webSearch = sObj.optBoolean(SkillsConfig.SKILL_WEB_SEARCH, true),
+                    fileManager = sObj.optBoolean(SkillsConfig.SKILL_FILE_MANAGER, true),
+                    bashRunner = sObj.optBoolean(SkillsConfig.SKILL_BASH_RUNNER, true),
+                    cronScheduler = sObj.optBoolean(SkillsConfig.SKILL_CRON_SCHEDULER, true),
+                    customSkills = customMap
+                )
+            } else SkillsConfig()
+        } else {
+            SkillsConfig()
+        }
+
+        return HermesConfig(
+            provider = providerConfig,
+            gateway = gatewayConfig,
+            system = systemConfig,
+            skills = skillsConfig
+        )
+    }
+
+    open fun deserialize(file: File = configFile): Result<HermesConfig> = runCatching {
+        if (!file.exists()) {
+            return@runCatching HermesConfig()
+        }
+        val content = file.readText(Charsets.UTF_8)
+        parseJson(content)
     }
 
     open fun serialize(config: HermesConfig): Result<File> = runCatching {

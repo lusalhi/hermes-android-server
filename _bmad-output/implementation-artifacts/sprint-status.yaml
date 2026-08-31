@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-24-2026 16:14
-last_updated: 08-31-2026 04:24
+last_updated: 08-31-2026 10:21
 project: hermes-android-server
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
@@ -58,13 +58,13 @@ development_status:
   4-3-real-time-hardware-telemetry-device-health-monitor: done
   epic-4-retrospective: optional
 
-  epic-5: in-progress
+  epic-5: done
   5-1-multi-platform-messaging-gateway-adapters-telegram-discord-s: done
   5-2-managed-cloudflare-public-webhook-tunnel-sidecar: done
   epic-5-retrospective: optional
 
-  epic-6: backlog
-  6-1-skill-manifest-viewer-tool-enablement-toggles: backlog
+  epic-6: in-progress
+  6-1-skill-manifest-viewer-tool-enablement-toggles: done
   6-2-episodic-memory-inspector-database-backup-factory-reset: backlog
   epic-6-retrospective: optional
 action_items:

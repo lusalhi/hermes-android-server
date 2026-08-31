@@ -158,7 +158,8 @@ fun HermesApp(
                     onSaveSettings = viewModel::onSaveSettings,
                     onDismissSaveMessage = viewModel::onDismissSaveMessage,
                     onRequestBatteryExemption = { viewModel.onRequestBatteryExemption(context) },
-                    oemGuidanceUrl = viewModel.getDontKillMyAppUrl()
+                    oemGuidanceUrl = viewModel.getDontKillMyAppUrl(),
+                    onToggleSkill = viewModel::onToggleSkill
                 )
             }
         }

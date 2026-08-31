@@ -9,6 +9,7 @@ import com.hermes.node.data.model.GatewayConfig
 import com.hermes.node.data.model.HermesConfig
 import com.hermes.node.data.model.ProviderConfig
 import com.hermes.node.data.model.RestApiGatewayConfig
+import com.hermes.node.data.model.SkillsConfig
 import com.hermes.node.data.model.SlackGatewayConfig
 import com.hermes.node.data.model.SystemConfig
 import com.hermes.node.data.model.TelegramGatewayConfig
@@ -64,6 +65,11 @@ interface ConfigRepository {
     fun saveAutoStart(enabled: Boolean)
     fun isPublicTunnelEnabled(): Boolean
     fun savePublicTunnel(enabled: Boolean)
+
+    fun getSkillsConfig(): SkillsConfig
+    fun saveSkillsConfig(skills: SkillsConfig)
+    fun isSkillEnabled(skillId: String): Boolean
+    fun saveSkillEnabled(skillId: String, enabled: Boolean)
 }
 
 class EncryptedConfigRepository(
@@ -100,6 +106,12 @@ class EncryptedConfigRepository(
         const val KEY_AUTO_START = "key_auto_start"
         const val KEY_PUBLIC_TUNNEL = "key_public_tunnel"
 
+        const val KEY_SKILL_WEB_SEARCH = "key_skill_web_search"
+        const val KEY_SKILL_FILE_MANAGER = "key_skill_file_manager"
+        const val KEY_SKILL_BASH_RUNNER = "key_skill_bash_runner"
+        const val KEY_SKILL_CRON_SCHEDULER = "key_skill_cron_scheduler"
+        const val KEY_CUSTOM_SKILL_PREFIX = "key_custom_skill_"
+
         fun create(context: Context): ConfigRepository {
             // Fail closed: do not fall back to unencrypted storage.
             // Callers should surface the error to the user rather than persisting secrets in plaintext.
@@ -119,7 +131,7 @@ class EncryptedConfigRepository(
     }
 
     override fun saveConfig(config: HermesConfig) {
-        prefs.edit()
+        val editor = prefs.edit()
             .putString(KEY_PROVIDER, config.provider.provider)
             .putString(KEY_API_KEY, config.provider.apiKey)
             .putString(KEY_CUSTOM_MODEL, config.provider.model)
@@ -140,7 +152,20 @@ class EncryptedConfigRepository(
             .putInt(KEY_REST_API_PORT, config.gateway.restApi.port)
             .putBoolean(KEY_AUTO_START, config.system.autoStartOnBoot)
             .putBoolean(KEY_PUBLIC_TUNNEL, config.system.publicTunnelEnabled)
-            .apply()
+            .putBoolean(KEY_SKILL_WEB_SEARCH, config.skills.webSearch)
+            .putBoolean(KEY_SKILL_FILE_MANAGER, config.skills.fileManager)
+            .putBoolean(KEY_SKILL_BASH_RUNNER, config.skills.bashRunner)
+            .putBoolean(KEY_SKILL_CRON_SCHEDULER, config.skills.cronScheduler)
+
+        // Remove stale custom skill keys not present in new configuration
+        prefs.all.keys
+            .filter { it.startsWith(KEY_CUSTOM_SKILL_PREFIX) && it.removePrefix(KEY_CUSTOM_SKILL_PREFIX) !in config.skills.customSkills }
+            .forEach { editor.remove(it) }
+
+        config.skills.customSkills.forEach { (id, enabled) ->
+            editor.putBoolean("$KEY_CUSTOM_SKILL_PREFIX$id", enabled)
+        }
+        editor.apply()
     }
 
     override fun getConfig(): HermesConfig {
@@ -190,7 +215,8 @@ class EncryptedConfigRepository(
             system = SystemConfig(
                 autoStartOnBoot = prefs.getBoolean(KEY_AUTO_START, false),
                 publicTunnelEnabled = prefs.getBoolean(KEY_PUBLIC_TUNNEL, false)
-            )
+            ),
+            skills = getSkillsConfig()
         )
     }
 
@@ -305,6 +331,61 @@ class EncryptedConfigRepository(
     override fun isPublicTunnelEnabled(): Boolean = prefs.getBoolean(KEY_PUBLIC_TUNNEL, false)
     override fun savePublicTunnel(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_PUBLIC_TUNNEL, enabled).apply()
+    }
+
+    override fun getSkillsConfig(): SkillsConfig {
+        val customMap = mutableMapOf<String, Boolean>()
+        for ((key, value) in prefs.all) {
+            if (key.startsWith(KEY_CUSTOM_SKILL_PREFIX) && value is Boolean) {
+                val skillId = key.removePrefix(KEY_CUSTOM_SKILL_PREFIX)
+                customMap[skillId] = value
+            }
+        }
+        return SkillsConfig(
+            webSearch = prefs.getBoolean(KEY_SKILL_WEB_SEARCH, true),
+            fileManager = prefs.getBoolean(KEY_SKILL_FILE_MANAGER, true),
+            bashRunner = prefs.getBoolean(KEY_SKILL_BASH_RUNNER, true),
+            cronScheduler = prefs.getBoolean(KEY_SKILL_CRON_SCHEDULER, true),
+            customSkills = customMap
+        )
+    }
+
+    override fun saveSkillsConfig(skills: SkillsConfig) {
+        val editor = prefs.edit()
+            .putBoolean(KEY_SKILL_WEB_SEARCH, skills.webSearch)
+            .putBoolean(KEY_SKILL_FILE_MANAGER, skills.fileManager)
+            .putBoolean(KEY_SKILL_BASH_RUNNER, skills.bashRunner)
+            .putBoolean(KEY_SKILL_CRON_SCHEDULER, skills.cronScheduler)
+
+        // Remove stale custom skill keys not present in new configuration
+        prefs.all.keys
+            .filter { it.startsWith(KEY_CUSTOM_SKILL_PREFIX) && it.removePrefix(KEY_CUSTOM_SKILL_PREFIX) !in skills.customSkills }
+            .forEach { editor.remove(it) }
+
+        skills.customSkills.forEach { (id, enabled) ->
+            editor.putBoolean("$KEY_CUSTOM_SKILL_PREFIX$id", enabled)
+        }
+        editor.apply()
+    }
+
+    override fun isSkillEnabled(skillId: String): Boolean = when (skillId) {
+        SkillsConfig.SKILL_WEB_SEARCH -> prefs.getBoolean(KEY_SKILL_WEB_SEARCH, true)
+        SkillsConfig.SKILL_FILE_MANAGER -> prefs.getBoolean(KEY_SKILL_FILE_MANAGER, true)
+        SkillsConfig.SKILL_BASH_RUNNER -> prefs.getBoolean(KEY_SKILL_BASH_RUNNER, true)
+        SkillsConfig.SKILL_CRON_SCHEDULER -> prefs.getBoolean(KEY_SKILL_CRON_SCHEDULER, true)
+        else -> prefs.getBoolean("$KEY_CUSTOM_SKILL_PREFIX$skillId", true)
+    }
+
+    override fun saveSkillEnabled(skillId: String, enabled: Boolean) {
+        val editor = prefs.edit()
+        when (skillId) {
+            SkillsConfig.SKILL_WEB_SEARCH -> editor.putBoolean(KEY_SKILL_WEB_SEARCH, enabled)
+            SkillsConfig.SKILL_FILE_MANAGER -> editor.putBoolean(KEY_SKILL_FILE_MANAGER, enabled)
+            SkillsConfig.SKILL_BASH_RUNNER -> editor.putBoolean(KEY_SKILL_BASH_RUNNER, enabled)
+            SkillsConfig.SKILL_CRON_SCHEDULER -> editor.putBoolean(KEY_SKILL_CRON_SCHEDULER, enabled)
+            else -> editor.putBoolean("$KEY_CUSTOM_SKILL_PREFIX$skillId", enabled)
+        }
+        editor.apply()
     }
 }
 

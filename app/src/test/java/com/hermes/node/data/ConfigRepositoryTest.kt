@@ -6,6 +6,7 @@ import com.hermes.node.data.model.GatewayConfig
 import com.hermes.node.data.model.HermesConfig
 import com.hermes.node.data.model.ProviderConfig
 import com.hermes.node.data.model.RestApiGatewayConfig
+import com.hermes.node.data.model.SkillsConfig
 import com.hermes.node.data.model.SlackGatewayConfig
 import com.hermes.node.data.model.SystemConfig
 import com.hermes.node.data.model.TelegramGatewayConfig
@@ -305,6 +306,106 @@ class ConfigRepositoryTest {
         assertEquals(8000, afterClear.gateway.restApi.port)
         assertFalse(afterClear.system.autoStartOnBoot)
         assertFalse(afterClear.system.publicTunnelEnabled)
+        assertTrue(afterClear.skills.webSearch)
+        assertTrue(afterClear.skills.fileManager)
+        assertTrue(afterClear.skills.bashRunner)
+        assertTrue(afterClear.skills.cronScheduler)
+        assertTrue(afterClear.skills.customSkills.isEmpty())
+    }
+
+    @Test
+    fun skillsConfig_defaultsToAllEnabled() {
+        val skills = repository.getSkillsConfig()
+        assertTrue(skills.webSearch)
+        assertTrue(skills.fileManager)
+        assertTrue(skills.bashRunner)
+        assertTrue(skills.cronScheduler)
+        assertTrue(skills.customSkills.isEmpty())
+
+        assertTrue(repository.isSkillEnabled(SkillsConfig.SKILL_WEB_SEARCH))
+        assertTrue(repository.isSkillEnabled(SkillsConfig.SKILL_FILE_MANAGER))
+        assertTrue(repository.isSkillEnabled(SkillsConfig.SKILL_BASH_RUNNER))
+        assertTrue(repository.isSkillEnabled(SkillsConfig.SKILL_CRON_SCHEDULER))
+        assertTrue(repository.isSkillEnabled("unregistered_skill"))
+    }
+
+    @Test
+    fun saveSkillsConfig_and_getSkillsConfig_persistsCoreAndCustomSkills() {
+        val customMap = mapOf("pdf_reader" to true, "voice_gen" to false)
+        val skills = SkillsConfig(
+            webSearch = false,
+            fileManager = true,
+            bashRunner = false,
+            cronScheduler = true,
+            customSkills = customMap
+        )
+
+        repository.saveSkillsConfig(skills)
+
+        val retrieved = repository.getSkillsConfig()
+        assertFalse(retrieved.webSearch)
+        assertTrue(retrieved.fileManager)
+        assertFalse(retrieved.bashRunner)
+        assertTrue(retrieved.cronScheduler)
+        assertEquals(true, retrieved.customSkills["pdf_reader"])
+        assertEquals(false, retrieved.customSkills["voice_gen"])
+    }
+
+    @Test
+    fun saveSkillEnabled_and_isSkillEnabled_individualAccessors() {
+        repository.saveSkillEnabled(SkillsConfig.SKILL_BASH_RUNNER, false)
+        assertFalse(repository.isSkillEnabled(SkillsConfig.SKILL_BASH_RUNNER))
+        assertTrue(repository.isSkillEnabled(SkillsConfig.SKILL_WEB_SEARCH))
+
+        repository.saveSkillEnabled(SkillsConfig.SKILL_WEB_SEARCH, false)
+        assertFalse(repository.isSkillEnabled(SkillsConfig.SKILL_WEB_SEARCH))
+
+        repository.saveSkillEnabled("custom_tool_x", false)
+        assertFalse(repository.isSkillEnabled("custom_tool_x"))
+
+        val fullSkills = repository.getSkillsConfig()
+        assertFalse(fullSkills.bashRunner)
+        assertFalse(fullSkills.webSearch)
+        assertTrue(fullSkills.fileManager)
+        assertTrue(fullSkills.cronScheduler)
+        assertEquals(false, fullSkills.customSkills["custom_tool_x"])
+    }
+
+    @Test
+    fun saveConfig_persistsSkillsBlock() {
+        val config = HermesConfig(
+            skills = SkillsConfig(
+                webSearch = true,
+                fileManager = false,
+                bashRunner = true,
+                cronScheduler = false
+            )
+        )
+        repository.saveConfig(config)
+
+        val retrieved = repository.getConfig()
+        assertTrue(retrieved.skills.webSearch)
+        assertFalse(retrieved.skills.fileManager)
+        assertTrue(retrieved.skills.bashRunner)
+        assertFalse(retrieved.skills.cronScheduler)
+    }
+
+    @Test
+    fun saveSkillsConfig_removesStaleCustomSkills() {
+        val initialSkills = SkillsConfig(
+            customSkills = mapOf("old_tool" to true, "kept_tool" to false)
+        )
+        repository.saveSkillsConfig(initialSkills)
+        assertTrue(repository.isSkillEnabled("old_tool"))
+
+        val updatedSkills = SkillsConfig(
+            customSkills = mapOf("kept_tool" to true)
+        )
+        repository.saveSkillsConfig(updatedSkills)
+
+        val retrieved = repository.getSkillsConfig()
+        assertFalse(retrieved.customSkills.containsKey("old_tool"))
+        assertEquals(true, retrieved.customSkills["kept_tool"])
     }
 }
 

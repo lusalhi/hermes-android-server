@@ -1,5 +1,7 @@
 package com.hermes.node.viewmodel
 
+import com.hermes.node.data.model.SkillInfo
+import com.hermes.node.data.model.SkillsConfig
 import com.hermes.node.engine.TunnelState
 
 enum class ServerStatus {
@@ -68,6 +70,8 @@ data class ServerUiState(
     val isSettingsSaved: Boolean = false,
     val configSaveMessage: String? = null,
     val isBatteryOptimizationIgnored: Boolean = false,
-    val showBatteryOptimizationPrompt: Boolean = false
+    val showBatteryOptimizationPrompt: Boolean = false,
+    val skillsConfig: SkillsConfig = SkillsConfig(),
+    val installedSkills: List<SkillInfo> = SkillsConfig.DEFAULT_CORE_SKILLS
 )
 

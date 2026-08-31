@@ -36,3 +36,12 @@
 - **Exponential backoff auto-recovery (confirmed deferred):** Already tracked above — no duplicate action needed. Re-confirmed in hemat code review 2026-08-31.
 - **Notification tunnel URL (confirmed deferred):** Already tracked above — no duplicate action needed. Re-confirmed in hemat code review 2026-08-31.
 
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1-skill-manifest-viewer-tool-enablement-toggles.md`
+  summary: Implement runtime hot-reload signal for PRoot agent daemon when skill toggles change without manual daemon restart.
+  evidence: Toggling skills updates hermes.json immediately, but the running agent process will only pick up skill changes upon process reload or next execution cycle.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1-skill-manifest-viewer-tool-enablement-toggles.md`
+  summary: Provide in-app marketplace/editor UI to dynamically install, configure, and delete custom skills.
+  evidence: Custom skills are currently deserialized and supported from hermes.json, but cannot be authored or uninstalled directly from the mobile Settings interface.
+
+

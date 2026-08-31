@@ -9,6 +9,7 @@ import com.hermes.node.data.model.GatewayConfig
 import com.hermes.node.data.model.HermesConfig
 import com.hermes.node.data.model.ProviderConfig
 import com.hermes.node.data.model.RestApiGatewayConfig
+import com.hermes.node.data.model.SkillsConfig
 import com.hermes.node.data.model.SlackGatewayConfig
 import com.hermes.node.data.model.SystemConfig
 import com.hermes.node.data.model.TelegramGatewayConfig
@@ -40,6 +41,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class ServerViewModel(
     context: Context? = null,
@@ -565,7 +568,9 @@ class ServerViewModel(
                     restApiPort = config.gateway.restApi.port.toString(),
                     isAutoStartEnabled = autoStart,
                     isPublicTunnelEnabled = config.system.publicTunnelEnabled,
-                    showBatteryOptimizationPrompt = if (shouldPrompt) true else current.showBatteryOptimizationPrompt
+                    showBatteryOptimizationPrompt = if (shouldPrompt) true else current.showBatteryOptimizationPrompt,
+                    skillsConfig = config.skills,
+                    installedSkills = config.skills.toInstalledSkills()
                 )
             }
             val hasCredentials = config.provider.apiKey.isNotBlank() ||
@@ -583,6 +588,66 @@ class ServerViewModel(
         }
     }
 
+    private val configMutex = Mutex()
+
+    private fun buildHermesConfig(state: ServerUiState, skillsOverride: SkillsConfig? = null): HermesConfig {
+        val trimmedApiKey = state.apiKey.trim()
+        val trimmedCustomModel = state.customModel.trim()
+        val trimmedCustomBaseUrl = state.customBaseUrl.trim()
+
+        val trimmedTelegramToken = state.telegramToken.trim()
+        val trimmedTelegramAdminIds = state.telegramAdminUserIds.trim()
+        val trimmedDiscordToken = state.discordToken.trim()
+        val trimmedDiscordChannelIds = state.discordChannelIds.trim()
+        val trimmedSlackAppToken = state.slackAppToken.trim()
+        val trimmedSlackBotToken = state.slackBotToken.trim()
+        val trimmedWhatsAppSessionLink = state.whatsAppSessionLink.trim()
+        val trimmedWhatsAppWebhookToken = state.whatsAppWebhookToken.trim()
+        val trimmedPortStr = state.restApiPort.trim()
+        val parsedPort = trimmedPortStr.toIntOrNull() ?: 8000
+        val finalPort = if (parsedPort in 1..65535) parsedPort else 8000
+
+        return HermesConfig(
+            provider = ProviderConfig(
+                provider = state.selectedProvider,
+                apiKey = trimmedApiKey,
+                model = trimmedCustomModel,
+                baseUrl = trimmedCustomBaseUrl
+            ),
+            gateway = GatewayConfig(
+                telegram = TelegramGatewayConfig(
+                    enabled = state.isTelegramEnabled,
+                    botToken = trimmedTelegramToken,
+                    adminUserIds = trimmedTelegramAdminIds
+                ),
+                discord = DiscordGatewayConfig(
+                    enabled = state.isDiscordEnabled,
+                    botToken = trimmedDiscordToken,
+                    channelIds = trimmedDiscordChannelIds
+                ),
+                slack = SlackGatewayConfig(
+                    enabled = state.isSlackEnabled,
+                    appToken = trimmedSlackAppToken,
+                    botToken = trimmedSlackBotToken
+                ),
+                whatsapp = WhatsAppGatewayConfig(
+                    enabled = state.isWhatsAppEnabled,
+                    sessionLink = trimmedWhatsAppSessionLink,
+                    webhookToken = trimmedWhatsAppWebhookToken
+                ),
+                restApi = RestApiGatewayConfig(
+                    enabled = state.isRestApiEnabled,
+                    port = finalPort
+                )
+            ),
+            system = SystemConfig(
+                autoStartOnBoot = state.isAutoStartEnabled,
+                publicTunnelEnabled = state.isPublicTunnelEnabled
+            ),
+            skills = skillsOverride ?: state.skillsConfig
+        )
+    }
+
     fun onSaveSettings() {
         saveSettingsJob?.cancel()
         _uiState.update {
@@ -593,136 +658,85 @@ class ServerViewModel(
             )
         }
         saveSettingsJob = viewModelScope.launch(ioDispatcher) {
-            val currentState = _uiState.value
-            val trimmedApiKey = currentState.apiKey.trim()
-            val trimmedCustomModel = currentState.customModel.trim()
-            val trimmedCustomBaseUrl = currentState.customBaseUrl.trim()
+            configMutex.withLock {
+                val currentState = _uiState.value
+                val config = buildHermesConfig(currentState)
 
-            val trimmedTelegramToken = currentState.telegramToken.trim()
-            val trimmedTelegramAdminIds = currentState.telegramAdminUserIds.trim()
-            val trimmedDiscordToken = currentState.discordToken.trim()
-            val trimmedDiscordChannelIds = currentState.discordChannelIds.trim()
-            val trimmedSlackAppToken = currentState.slackAppToken.trim()
-            val trimmedSlackBotToken = currentState.slackBotToken.trim()
-            val trimmedWhatsAppSessionLink = currentState.whatsAppSessionLink.trim()
-            val trimmedWhatsAppWebhookToken = currentState.whatsAppWebhookToken.trim()
-            val trimmedPortStr = currentState.restApiPort.trim()
-            val parsedPort = trimmedPortStr.toIntOrNull() ?: 8000
-            val finalPort = if (parsedPort in 1..65535) parsedPort else 8000
-
-            // Update UI state with trimmed inputs
-            _uiState.update {
-                it.copy(
-                    apiKey = trimmedApiKey,
-                    customModel = trimmedCustomModel,
-                    customBaseUrl = trimmedCustomBaseUrl,
-                    telegramToken = trimmedTelegramToken,
-                    telegramAdminUserIds = trimmedTelegramAdminIds,
-                    discordToken = trimmedDiscordToken,
-                    discordChannelIds = trimmedDiscordChannelIds,
-                    slackAppToken = trimmedSlackAppToken,
-                    slackBotToken = trimmedSlackBotToken,
-                    whatsAppSessionLink = trimmedWhatsAppSessionLink,
-                    whatsAppWebhookToken = trimmedWhatsAppWebhookToken,
-                    restApiPort = finalPort.toString()
-                )
-            }
-
-            val config = HermesConfig(
-                provider = ProviderConfig(
-                    provider = currentState.selectedProvider,
-                    apiKey = trimmedApiKey,
-                    model = trimmedCustomModel,
-                    baseUrl = trimmedCustomBaseUrl
-                ),
-                gateway = GatewayConfig(
-                    telegram = TelegramGatewayConfig(
-                        enabled = currentState.isTelegramEnabled,
-                        botToken = trimmedTelegramToken,
-                        adminUserIds = trimmedTelegramAdminIds
-                    ),
-                    discord = DiscordGatewayConfig(
-                        enabled = currentState.isDiscordEnabled,
-                        botToken = trimmedDiscordToken,
-                        channelIds = trimmedDiscordChannelIds
-                    ),
-                    slack = SlackGatewayConfig(
-                        enabled = currentState.isSlackEnabled,
-                        appToken = trimmedSlackAppToken,
-                        botToken = trimmedSlackBotToken
-                    ),
-                    whatsapp = WhatsAppGatewayConfig(
-                        enabled = currentState.isWhatsAppEnabled,
-                        sessionLink = trimmedWhatsAppSessionLink,
-                        webhookToken = trimmedWhatsAppWebhookToken
-                    ),
-                    restApi = RestApiGatewayConfig(
-                        enabled = currentState.isRestApiEnabled,
-                        port = finalPort
+                // Update UI state with trimmed inputs
+                _uiState.update {
+                    it.copy(
+                        apiKey = config.provider.apiKey,
+                        customModel = config.provider.model,
+                        customBaseUrl = config.provider.baseUrl,
+                        telegramToken = config.gateway.telegram.botToken,
+                        telegramAdminUserIds = config.gateway.telegram.adminUserIds,
+                        discordToken = config.gateway.discord.botToken,
+                        discordChannelIds = config.gateway.discord.channelIds,
+                        slackAppToken = config.gateway.slack.appToken,
+                        slackBotToken = config.gateway.slack.botToken,
+                        whatsAppSessionLink = config.gateway.whatsapp.sessionLink,
+                        whatsAppWebhookToken = config.gateway.whatsapp.webhookToken,
+                        restApiPort = config.gateway.restApi.port.toString()
                     )
-                ),
-                system = SystemConfig(
-                    autoStartOnBoot = currentState.isAutoStartEnabled,
-                    publicTunnelEnabled = currentState.isPublicTunnelEnabled
-                )
-            )
+                }
 
-            try {
-                // Fail closed if persistence dependencies are unavailable
-                if (configRepository == null || configSerializer == null) {
-                    val missing = buildList {
-                        if (configRepository == null) add("ConfigRepository")
-                        if (configSerializer == null) add("ConfigSerializer")
-                    }.joinToString(" and ")
-                    val error = "Storage unavailable: $missing not initialized"
+                try {
+                    // Fail closed if persistence dependencies are unavailable
+                    if (configRepository == null || configSerializer == null) {
+                        val missing = buildList {
+                            if (configRepository == null) add("ConfigRepository")
+                            if (configSerializer == null) add("ConfigSerializer")
+                        }.joinToString(" and ")
+                        val error = "Storage unavailable: $missing not initialized"
+                        _uiState.update {
+                            it.copy(
+                                isSavingSettings = false,
+                                isSettingsSaved = false,
+                                configSaveMessage = error
+                            )
+                        }
+                        onAddLog(error, LogLevel.ERROR)
+                        return@launch
+                    }
+
+                    // 1. Atomically serialize to hermes.json first — fail closed before committing prefs
+                    val result = configSerializer.serialize(config)
+                    if (result.isFailure) {
+                        val error = result.exceptionOrNull()?.message ?: "Failed to write configuration"
+                        _uiState.update {
+                            it.copy(
+                                isSavingSettings = false,
+                                isSettingsSaved = false,
+                                configSaveMessage = "Failed to serialize config: $error"
+                            )
+                        }
+                        onAddLog("Error saving runtime configuration: $error", LogLevel.ERROR)
+                        return@launch
+                    }
+
+                    // 2. Save to ConfigRepository only after file success (prevents prefs/file divergence)
+                    configRepository.saveConfig(config)
+
+                    _uiState.update {
+                        it.copy(
+                            isSavingSettings = false,
+                            isSettingsSaved = true,
+                            configSaveMessage = "Settings saved successfully"
+                        )
+                    }
+                    onAddLog("Settings saved successfully and hermes.json serialized (0600).", LogLevel.INFO)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    val error = e.message ?: "Unknown error saving configuration"
                     _uiState.update {
                         it.copy(
                             isSavingSettings = false,
                             isSettingsSaved = false,
-                            configSaveMessage = error
+                            configSaveMessage = "Failed to save settings: $error"
                         )
                     }
-                    onAddLog(error, LogLevel.ERROR)
-                    return@launch
+                    onAddLog("Failed to save settings: $error", LogLevel.ERROR)
                 }
-
-                // 1. Atomically serialize to hermes.json first — fail closed before committing prefs
-                val result = configSerializer.serialize(config)
-                if (result.isFailure) {
-                    val error = result.exceptionOrNull()?.message ?: "Failed to write configuration"
-                    _uiState.update {
-                        it.copy(
-                            isSavingSettings = false,
-                            isSettingsSaved = false,
-                            configSaveMessage = "Failed to serialize config: $error"
-                        )
-                    }
-                    onAddLog("Error saving runtime configuration: $error", LogLevel.ERROR)
-                    return@launch
-                }
-
-                // 2. Save to ConfigRepository only after file success (prevents prefs/file divergence)
-                configRepository.saveConfig(config)
-
-                _uiState.update {
-                    it.copy(
-                        isSavingSettings = false,
-                        isSettingsSaved = true,
-                        configSaveMessage = "Settings saved successfully"
-                    )
-                }
-                onAddLog("Settings saved successfully and hermes.json serialized (0600).", LogLevel.INFO)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                val error = e.message ?: "Unknown error saving configuration"
-                _uiState.update {
-                    it.copy(
-                        isSavingSettings = false,
-                        isSettingsSaved = false,
-                        configSaveMessage = "Failed to save settings: $error"
-                    )
-                }
-                onAddLog("Failed to save settings: $error", LogLevel.ERROR)
             }
         }
     }
@@ -733,6 +747,58 @@ class ServerViewModel(
                 isSettingsSaved = false,
                 configSaveMessage = null
             )
+        }
+    }
+
+    fun onToggleSkill(skillId: String, enabled: Boolean) {
+        _uiState.update { current ->
+            val updatedSkills = current.skillsConfig.withSkillToggled(skillId, enabled)
+            current.copy(
+                skillsConfig = updatedSkills,
+                installedSkills = updatedSkills.toInstalledSkills(),
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+
+        viewModelScope.launch(ioDispatcher) {
+            configMutex.withLock {
+                val currentState = _uiState.value
+                val config = buildHermesConfig(currentState)
+
+                try {
+                    if (configSerializer != null) {
+                        val result = configSerializer.serialize(config)
+                        if (result.isFailure) {
+                            val error = result.exceptionOrNull()?.message ?: "Failed to persist skill configuration"
+                            _uiState.update { current ->
+                                val reverted = current.skillsConfig.withSkillToggled(skillId, !enabled)
+                                current.copy(
+                                    skillsConfig = reverted,
+                                    installedSkills = reverted.toInstalledSkills(),
+                                    configSaveMessage = "Failed to update skill: $error"
+                                )
+                            }
+                            onAddLog("Failed to serialize skill configuration: $error", LogLevel.ERROR)
+                            return@launch
+                        }
+                    }
+                    configRepository?.saveSkillsConfig(config.skills)
+                    onAddLog("Skill '$skillId' ${if (enabled) "enabled" else "disabled"}. hermes.json updated.", LogLevel.INFO)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    val error = e.message ?: "Unknown error saving skill configuration"
+                    _uiState.update { current ->
+                        val reverted = current.skillsConfig.withSkillToggled(skillId, !enabled)
+                        current.copy(
+                            skillsConfig = reverted,
+                            installedSkills = reverted.toInstalledSkills(),
+                            configSaveMessage = "Failed to update skill: $error"
+                        )
+                    }
+                    onAddLog("Failed to update skill '$skillId': $error", LogLevel.ERROR)
+                }
+            }
         }
     }
 

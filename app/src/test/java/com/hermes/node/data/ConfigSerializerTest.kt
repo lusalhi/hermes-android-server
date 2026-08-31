@@ -5,6 +5,7 @@ import com.hermes.node.data.model.GatewayConfig
 import com.hermes.node.data.model.HermesConfig
 import com.hermes.node.data.model.ProviderConfig
 import com.hermes.node.data.model.RestApiGatewayConfig
+import com.hermes.node.data.model.SkillsConfig
 import com.hermes.node.data.model.SlackGatewayConfig
 import com.hermes.node.data.model.SystemConfig
 import com.hermes.node.data.model.TelegramGatewayConfig
@@ -360,5 +361,139 @@ class ConfigSerializerTest {
         val result = failingSerializer.serialize(config)
         assertTrue(result.isFailure)
         assertTrue(result.exceptionOrNull()?.message?.contains("0600") == true)
+    }
+
+    @Test
+    fun generateJson_withSkills_serializesCoreAndCustomSkills() {
+        val config = HermesConfig(
+            skills = SkillsConfig(
+                webSearch = true,
+                fileManager = false,
+                bashRunner = true,
+                cronScheduler = false,
+                customSkills = mapOf("custom_translator" to true, "data_analyzer" to false)
+            )
+        )
+
+        val jsonString = serializer.generateJson(config)
+        val json = JSONObject(jsonString)
+
+        assertTrue(json.has("skills"))
+        val skillsJson = json.getJSONObject("skills")
+        assertTrue(skillsJson.getBoolean("web_search"))
+        assertFalse(skillsJson.getBoolean("file_manager"))
+        assertTrue(skillsJson.getBoolean("bash_runner"))
+        assertFalse(skillsJson.getBoolean("cron_scheduler"))
+        assertTrue(skillsJson.getBoolean("custom_translator"))
+        assertFalse(skillsJson.getBoolean("data_analyzer"))
+    }
+
+    @Test
+    fun parseJson_withCompleteSkills_deserializesCorrectly() {
+        val jsonString = """
+            {
+                "version": 1,
+                "provider": { "name": "openrouter", "api_key": "sk-test" },
+                "skills": {
+                    "web_search": false,
+                    "file_manager": true,
+                    "bash_runner": false,
+                    "cron_scheduler": true,
+                    "vision_scanner": true
+                }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertEquals("openrouter", parsed.provider.provider)
+        assertEquals("sk-test", parsed.provider.apiKey)
+        assertFalse(parsed.skills.webSearch)
+        assertTrue(parsed.skills.fileManager)
+        assertFalse(parsed.skills.bashRunner)
+        assertTrue(parsed.skills.cronScheduler)
+        assertEquals(true, parsed.skills.customSkills["vision_scanner"])
+    }
+
+    @Test
+    fun parseJson_withoutSkillsBlock_defaultsAllSkillsToTrue() {
+        val jsonString = """
+            {
+                "version": 1,
+                "provider": { "name": "nous_portal", "api_key": "sk-123" }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertTrue(parsed.skills.webSearch)
+        assertTrue(parsed.skills.fileManager)
+        assertTrue(parsed.skills.bashRunner)
+        assertTrue(parsed.skills.cronScheduler)
+        assertTrue(parsed.skills.customSkills.isEmpty())
+    }
+
+    @Test
+    fun parseJson_withPartialSkillsBlock_defaultsMissingSkillsToTrue() {
+        val jsonString = """
+            {
+                "skills": {
+                    "bash_runner": false
+                }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertTrue(parsed.skills.webSearch)
+        assertTrue(parsed.skills.fileManager)
+        assertFalse(parsed.skills.bashRunner)
+        assertTrue(parsed.skills.cronScheduler)
+    }
+
+    @Test
+    fun serialize_and_deserialize_roundTripPreservesSkills() {
+        val config = HermesConfig(
+            provider = ProviderConfig(provider = "anthropic", apiKey = "sk-ant"),
+            skills = SkillsConfig(
+                webSearch = true,
+                fileManager = false,
+                bashRunner = false,
+                cronScheduler = true,
+                customSkills = mapOf("pdf_parser" to true)
+            )
+        )
+
+        val result = serializer.serialize(config)
+        assertTrue(result.isSuccess)
+
+        val deserializedResult = serializer.deserialize()
+        assertTrue(deserializedResult.isSuccess)
+        val loaded = deserializedResult.getOrThrow()
+
+        assertEquals("anthropic", loaded.provider.provider)
+        assertEquals("sk-ant", loaded.provider.apiKey)
+        assertTrue(loaded.skills.webSearch)
+        assertFalse(loaded.skills.fileManager)
+        assertFalse(loaded.skills.bashRunner)
+        assertTrue(loaded.skills.cronScheduler)
+        assertEquals(true, loaded.skills.customSkills["pdf_parser"])
+    }
+
+    @Test
+    fun parseJson_withNonBooleanCustomSkill_ignoresNonBooleanFields() {
+        val jsonString = """
+            {
+                "skills": {
+                    "valid_tool": false,
+                    "string_boolean": "true",
+                    "nested_object": { "nested": true },
+                    "number_val": 123
+                }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertEquals(false, parsed.skills.customSkills["valid_tool"])
+        assertEquals(true, parsed.skills.customSkills["string_boolean"])
+        assertFalse(parsed.skills.customSkills.containsKey("nested_object"))
+        assertFalse(parsed.skills.customSkills.containsKey("number_val"))
     }
 }

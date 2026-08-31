@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lan
@@ -41,7 +43,10 @@ import androidx.compose.material.icons.filled.Numbers
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
@@ -72,11 +77,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.hermes.node.data.model.SkillsConfig
 import com.hermes.node.ui.theme.DarkBorder
 import com.hermes.node.ui.theme.DarkSurface
 import com.hermes.node.ui.theme.HermesCyan
@@ -112,6 +120,7 @@ fun SettingsScreen(
     onUpdateWhatsAppWebhookToken: (String) -> Unit = {},
     onUpdateRestApiEnabled: (Boolean) -> Unit = {},
     onUpdateRestApiPort: (String) -> Unit = {},
+    onToggleSkill: (String, Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -358,6 +367,150 @@ fun SettingsScreen(
                                     unfocusedContainerColor = DarkSurface,
                                     focusedBorderColor = HermesCyan,
                                     unfocusedBorderColor = DarkBorder
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Agent Skills & Capabilities Section Header
+        Text(
+            text = "Agent Skills & Capabilities",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+
+        // Agent Skills & Capabilities Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder))
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Extension,
+                        contentDescription = "Skills",
+                        tint = HermesCyan
+                    )
+                    Column {
+                        Text(
+                            text = "Installed Capabilities",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = "Autonomous tool execution whitelist for Hermes Agent",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                if (state.installedSkills.isEmpty()) {
+                    Text(
+                        text = "No skills installed or detected.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    state.installedSkills.forEach { skill ->
+                        val icon = when (skill.id) {
+                            SkillsConfig.SKILL_WEB_SEARCH -> Icons.Default.TravelExplore
+                            SkillsConfig.SKILL_FILE_MANAGER -> Icons.Default.FolderOpen
+                            SkillsConfig.SKILL_BASH_RUNNER -> Icons.Default.Terminal
+                            SkillsConfig.SKILL_CRON_SCHEDULER -> Icons.Default.Schedule
+                            else -> Icons.Default.Extension
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .background(
+                                            color = if (skill.enabled) HermesCyan.copy(alpha = 0.15f) else DarkBorder.copy(alpha = 0.3f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                        .border(
+                                            width = 1.dp,
+                                            color = if (skill.enabled) HermesCyan.copy(alpha = 0.5f) else DarkBorder,
+                                            shape = RoundedCornerShape(8.dp)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = skill.name,
+                                        tint = if (skill.enabled) HermesCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = skill.name,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onBackground
+                                        )
+                                        if (skill.isCore) {
+                                            Surface(
+                                                color = DarkBorder.copy(alpha = 0.5f),
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "CORE",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = HermesCyan,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = skill.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Switch(
+                                checked = skill.enabled,
+                                onCheckedChange = { enabled ->
+                                    onToggleSkill(skill.id, enabled)
+                                },
+                                modifier = Modifier.semantics {
+                                    contentDescription = "Toggle ${skill.name} capability"
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = HermesCyan
                                 )
                             )
                         }
