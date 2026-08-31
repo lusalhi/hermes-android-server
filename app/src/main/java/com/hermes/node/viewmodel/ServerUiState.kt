@@ -1,5 +1,7 @@
 package com.hermes.node.viewmodel
 
+import com.hermes.node.engine.TunnelState
+
 enum class ServerStatus {
     STOPPED,
     STARTING,
@@ -52,6 +54,8 @@ data class ServerUiState(
     val restApiPort: String = "8000",
     val isPublicTunnelEnabled: Boolean = false,
     val tunnelUrl: String? = null,
+    val tunnelState: TunnelState = TunnelState.Stopped,
+    val showQrCodeDialog: Boolean = false,
     val errorMessage: String? = null,
     val isBootstrapping: Boolean = false,
     val isBootstrapComplete: Boolean = false,

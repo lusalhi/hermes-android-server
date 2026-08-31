@@ -20,6 +20,7 @@ import android.content.Context
 import com.hermes.node.service.BatteryOptimizationHelper
 import com.hermes.node.service.BatteryOptimizationHelperInterface
 import com.hermes.node.service.HermesServerService
+import com.hermes.node.engine.CloudflareTunnelManager
 import com.hermes.node.engine.DeviceTelemetry
 import com.hermes.node.engine.LogStreamerInterface
 import com.hermes.node.engine.ProcessControllerInterface
@@ -27,6 +28,8 @@ import com.hermes.node.engine.ProcessState
 import com.hermes.node.engine.SystemTelemetryCollector
 import com.hermes.node.engine.TelemetryCollector
 import com.hermes.node.engine.TelemetryMonitor
+import com.hermes.node.engine.TunnelManagerInterface
+import com.hermes.node.engine.TunnelState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -48,20 +51,38 @@ class ServerViewModel(
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val serviceRunningFlow: StateFlow<Boolean>? = null,
-    private val startServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.start(ctx) },
-    private val stopServiceAction: ((Context) -> Unit)? = { ctx -> HermesServerService.stop(ctx) },
+    private val startServiceAction: ((Context) -> Unit)? = { ctx -> try { HermesServerService.start(ctx) } catch (_: Throwable) {} },
+    private val stopServiceAction: ((Context) -> Unit)? = { ctx -> try { HermesServerService.stop(ctx) } catch (_: Throwable) {} },
     private val batteryOptimizationHelper: BatteryOptimizationHelperInterface? = BatteryOptimizationHelper(),
     private val logStreamer: LogStreamerInterface? = null,
     private val telemetryCollector: TelemetryCollector? = null,
-    private val telemetryMonitor: TelemetryMonitor? = null
+    private val telemetryMonitor: TelemetryMonitor? = null,
+    private val tunnelManager: TunnelManagerInterface? = null
 ) : ViewModel() {
 
-    private val context: Context? = context?.applicationContext ?: context
+    private val context: Context? = try {
+        context?.applicationContext ?: context
+    } catch (_: Throwable) {
+        context
+    }
     private val _uiState = MutableStateFlow(ServerUiState())
     val uiState: StateFlow<ServerUiState> = _uiState.asStateFlow()
 
-    private val effectiveCollector: TelemetryCollector? = telemetryCollector ?: (this.context?.let { SystemTelemetryCollector(it, ioDispatcher = ioDispatcher) })
+    private val effectiveCollector: TelemetryCollector? = telemetryCollector ?: (this.context?.let { ctx ->
+        try {
+            SystemTelemetryCollector(ctx, ioDispatcher = ioDispatcher)
+        } catch (_: Throwable) {
+            null
+        }
+    })
     private val effectiveMonitor: TelemetryMonitor? = telemetryMonitor ?: (effectiveCollector?.let { TelemetryMonitor(it, pollingIntervalMs = 2000L, dispatcher = defaultDispatcher) })
+    private val effectiveTunnelManager: TunnelManagerInterface? = tunnelManager ?: (this.context?.let { ctx ->
+        try {
+            CloudflareTunnelManager(filesDir = ctx.filesDir, ioDispatcher = ioDispatcher)
+        } catch (_: Throwable) {
+            null
+        }
+    })
 
     private var metricsJob: Job? = null
     private var telemetryJob: Job? = null
@@ -71,6 +92,8 @@ class ServerViewModel(
     private var serviceObserverJob: Job? = null
     private var processObserverJob: Job? = null
     private var logObserverJob: Job? = null
+    private var tunnelObserverJob: Job? = null
+    private var tunnelControlJob: Job? = null
     private val maxLogCapacity = 2000
 
     init {
@@ -82,6 +105,7 @@ class ServerViewModel(
         checkAndInitializeBootstrap()
         observeServiceState()
         observeProcessState()
+        observeTunnelState()
         startTelemetryPolling()
     }
 
@@ -401,16 +425,22 @@ class ServerViewModel(
         transitionJob = viewModelScope.launch {
             delay(600) // Brief startup transition
 
+            val port = _uiState.value.restApiPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 8000
             _uiState.update {
                 val shouldPrompt = !it.isBatteryOptimizationIgnored
                 it.copy(
                     status = ServerStatus.RUNNING,
                     uptimeSeconds = 0L,
-                    tunnelUrl = if (it.isPublicTunnelEnabled) "https://hermes-node.trycloudflare.com" else null,
                     showBatteryOptimizationPrompt = if (shouldPrompt) true else it.showBatteryOptimizationPrompt
                 )
             }
-            val port = _uiState.value.restApiPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 8000
+            if (_uiState.value.isPublicTunnelEnabled) {
+                onAddLog("Starting Cloudflare Public Tunnel...", LogLevel.INFO)
+                tunnelControlJob?.cancel()
+                tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
+                    effectiveTunnelManager?.start(port)
+                }
+            }
             if (_uiState.value.isRestApiEnabled) {
                 onAddLog("Hermes Node daemon running on port $port", LogLevel.INFO)
             } else {
@@ -440,6 +470,10 @@ class ServerViewModel(
         metricsJob?.cancel()
         metricsJob = null
         transitionJob?.cancel()
+        tunnelControlJob?.cancel()
+        tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
+            effectiveTunnelManager?.stop()
+        }
 
         _uiState.update { it.copy(status = ServerStatus.STOPPING) }
         onAddLog("Stopping Hermes Node daemon...", LogLevel.INFO)
@@ -459,7 +493,9 @@ class ServerViewModel(
                 it.copy(
                     status = ServerStatus.STOPPED,
                     uptimeSeconds = 0L,
-                    tunnelUrl = null
+                    tunnelUrl = null,
+                    tunnelState = TunnelState.Stopped,
+                    showQrCodeDialog = false
                 )
             }
             onAddLog("Hermes Node daemon stopped.", LogLevel.INFO)
@@ -846,24 +882,46 @@ class ServerViewModel(
     }
 
     fun onUpdatePublicTunnel(enabled: Boolean) {
+        val port = _uiState.value.restApiPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 8000
         _uiState.update { current ->
             current.copy(
                 isPublicTunnelEnabled = enabled,
                 isSettingsSaved = false,
                 configSaveMessage = null,
-                tunnelUrl = if (enabled && current.status == ServerStatus.RUNNING) {
-                    "https://hermes-node.trycloudflare.com"
-                } else {
-                    null
-                }
+                tunnelUrl = if (enabled) current.tunnelUrl else null,
+                tunnelState = if (enabled) current.tunnelState else TunnelState.Stopped
             )
         }
+        if (_uiState.value.status == ServerStatus.RUNNING) {
+            tunnelControlJob?.cancel()
+            tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
+                if (enabled) {
+                    onAddLog("Starting Cloudflare Public Tunnel...", LogLevel.INFO)
+                    effectiveTunnelManager?.start(port)
+                } else {
+                    onAddLog("Stopping Cloudflare Public Tunnel...", LogLevel.INFO)
+                    effectiveTunnelManager?.stop()
+                }
+            }
+        }
+    }
+
+    fun onShowQrCodeDialog() {
+        _uiState.update { it.copy(showQrCodeDialog = true) }
+    }
+
+    fun onDismissQrCodeDialog() {
+        _uiState.update { it.copy(showQrCodeDialog = false) }
     }
 
     fun onSetError(message: String) {
         metricsJob?.cancel()
         metricsJob = null
         transitionJob?.cancel()
+        tunnelControlJob?.cancel()
+        tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
+            effectiveTunnelManager?.stop()
+        }
         context?.let { ctx ->
             try {
                 stopServiceAction?.invoke(ctx)
@@ -874,6 +932,8 @@ class ServerViewModel(
                 status = ServerStatus.ERROR,
                 uptimeSeconds = 0L,
                 tunnelUrl = null,
+                tunnelState = TunnelState.Stopped,
+                showQrCodeDialog = false,
                 errorMessage = message
             )
         }
@@ -889,6 +949,31 @@ class ServerViewModel(
         }
     }
 
+    private fun observeTunnelState() {
+        val manager = effectiveTunnelManager ?: return
+        tunnelObserverJob?.cancel()
+        tunnelObserverJob = viewModelScope.launch {
+            manager.state.collect { tState ->
+                when (tState) {
+                    is TunnelState.Running -> {
+                        _uiState.update { it.copy(tunnelUrl = tState.url, tunnelState = tState) }
+                        onAddLog("Cloudflare Tunnel connected: ${tState.url}", LogLevel.INFO)
+                    }
+                    is TunnelState.Error -> {
+                        _uiState.update { it.copy(tunnelUrl = null, tunnelState = tState) }
+                        onAddLog("Cloudflare Tunnel error: ${tState.message}", LogLevel.WARN)
+                    }
+                    is TunnelState.Starting -> {
+                        _uiState.update { it.copy(tunnelState = tState) }
+                    }
+                    is TunnelState.Stopped -> {
+                        _uiState.update { it.copy(tunnelUrl = null, tunnelState = tState) }
+                    }
+                }
+            }
+        }
+    }
+
     private fun observeServiceState() {
         val flow = serviceRunningFlow ?: return
         serviceObserverJob?.cancel()
@@ -899,24 +984,35 @@ class ServerViewModel(
                     metricsJob?.cancel()
                     metricsJob = null
                     transitionJob?.cancel()
+                    tunnelControlJob?.cancel()
+                    tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
+                        effectiveTunnelManager?.stop()
+                    }
                     _uiState.update {
                         it.copy(
                             status = ServerStatus.STOPPED,
                             uptimeSeconds = 0L,
-                            tunnelUrl = null
+                            tunnelUrl = null,
+                            tunnelState = TunnelState.Stopped
                         )
                     }
                     onAddLog("Hermes Node daemon stopped.", LogLevel.INFO)
                 } else if (isRunning && currentStatus == ServerStatus.STOPPED) {
                     transitionJob?.cancel()
+                    val port = _uiState.value.restApiPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 8000
                     _uiState.update {
                         it.copy(
                             status = ServerStatus.RUNNING,
-                            uptimeSeconds = 0L,
-                            tunnelUrl = if (it.isPublicTunnelEnabled) "https://hermes-node.trycloudflare.com" else null
+                            uptimeSeconds = 0L
                         )
                     }
-                    val port = _uiState.value.restApiPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 8000
+                    if (_uiState.value.isPublicTunnelEnabled) {
+                        onAddLog("Starting Cloudflare Public Tunnel...", LogLevel.INFO)
+                        tunnelControlJob?.cancel()
+                        tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
+                            effectiveTunnelManager?.start(port)
+                        }
+                    }
                     if (_uiState.value.isRestApiEnabled) {
                         onAddLog("Hermes Node daemon running on port $port", LogLevel.INFO)
                     } else {
@@ -940,11 +1036,16 @@ class ServerViewModel(
                             metricsJob?.cancel()
                             metricsJob = null
                             transitionJob?.cancel()
+                            tunnelControlJob?.cancel()
+                            tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
+                                effectiveTunnelManager?.stop()
+                            }
                             _uiState.update {
                                 it.copy(
                                     status = ServerStatus.STOPPED,
                                     uptimeSeconds = 0L,
-                                    tunnelUrl = null
+                                    tunnelUrl = null,
+                                    tunnelState = TunnelState.Stopped
                                 )
                             }
                             onAddLog("Sub-process terminated unexpectedly.", LogLevel.WARN)
@@ -980,6 +1081,22 @@ class ServerViewModel(
         metricsJob = null
         telemetryJob?.cancel()
         telemetryJob = null
+        tunnelObserverJob?.cancel()
+        tunnelObserverJob = null
+        tunnelControlJob?.cancel()
+        tunnelControlJob = null
+        serviceObserverJob?.cancel()
+        serviceObserverJob = null
+        processObserverJob?.cancel()
+        processObserverJob = null
+        logObserverJob?.cancel()
+        logObserverJob = null
+        transitionJob?.cancel()
+        transitionJob = null
+        bootstrapJob?.cancel()
+        bootstrapJob = null
+        saveSettingsJob?.cancel()
+        saveSettingsJob = null
         effectiveMonitor?.stop()
     }
 
@@ -1032,17 +1149,6 @@ class ServerViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        metricsJob?.cancel()
-        metricsJob = null
-        telemetryJob?.cancel()
-        telemetryJob = null
-        effectiveMonitor?.stop()
-        transitionJob?.cancel()
-        bootstrapJob?.cancel()
-        saveSettingsJob?.cancel()
-        serviceObserverJob?.cancel()
-        processObserverJob?.cancel()
-        logObserverJob?.cancel()
-        logObserverJob = null
+        stopMonitoring()
     }
 }

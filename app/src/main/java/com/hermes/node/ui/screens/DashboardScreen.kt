@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Thermostat
@@ -53,6 +54,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.hermes.node.ui.components.MetricCard
+import com.hermes.node.ui.components.QrCodeDialog
 import com.hermes.node.ui.components.RuntimeIntegrityCard
 import com.hermes.node.ui.components.ServerControlCard
 import com.hermes.node.ui.components.StatusPill
@@ -84,6 +86,8 @@ fun DashboardScreen(
     onDismissBatteryPrompt: (() -> Unit)? = null,
     onPauseTelemetry: (() -> Unit)? = null,
     onResumeTelemetry: (() -> Unit)? = null,
+    onShowQrCode: (() -> Unit)? = null,
+    onDismissQrCode: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -474,18 +478,29 @@ fun DashboardScreen(
                             color = HermesCyanLight
                         )
                     }
-                    IconButton(
-                        onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("Tunnel URL", state.tunnelUrl))
-                            Toast.makeText(context, "Copied Tunnel URL to clipboard", Toast.LENGTH_SHORT).show()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { onShowQrCode?.invoke() }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.QrCode,
+                                contentDescription = "Show QR Code",
+                                tint = HermesCyan
+                            )
                         }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ContentCopy,
-                            contentDescription = "Copy URL",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        IconButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Tunnel URL", state.tunnelUrl))
+                                Toast.makeText(context, "Copied Tunnel URL to clipboard", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Copy URL",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
@@ -564,5 +579,12 @@ fun DashboardScreen(
                 }
             }
         }
+    }
+
+    if (state.showQrCodeDialog && state.tunnelUrl != null) {
+        QrCodeDialog(
+            url = state.tunnelUrl,
+            onDismiss = { onDismissQrCode?.invoke() }
+        )
     }
 }

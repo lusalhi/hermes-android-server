@@ -121,7 +121,9 @@ fun HermesApp(
                     onRequestBatteryExemption = { viewModel.onRequestBatteryExemption(context) },
                     onDismissBatteryPrompt = viewModel::onDismissBatteryOptimizationPrompt,
                     onPauseTelemetry = viewModel::pauseTelemetry,
-                    onResumeTelemetry = viewModel::resumeTelemetry
+                    onResumeTelemetry = viewModel::resumeTelemetry,
+                    onShowQrCode = viewModel::onShowQrCodeDialog,
+                    onDismissQrCode = viewModel::onDismissQrCodeDialog
                 )
             }
             composable(Screen.Logs.route) {

@@ -11,9 +11,14 @@ import com.hermes.node.data.model.ProviderConfig
 import com.hermes.node.data.model.SystemConfig
 import com.hermes.node.engine.DeviceTelemetry
 import com.hermes.node.engine.TelemetryCollector
+import com.hermes.node.engine.TunnelManagerInterface
+import com.hermes.node.engine.TunnelState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
@@ -102,23 +107,31 @@ class ServerViewModelTest {
 
     @Test
     fun onStartServer_withPublicTunnel_setsTunnelUrl_andResetsOnStop() = runTest(testDispatcher) {
-        viewModel.onUpdatePublicTunnel(true)
-        assertTrue(viewModel.uiState.value.isPublicTunnelEnabled)
-        assertNull(viewModel.uiState.value.tunnelUrl)
+        val fakeTunnel = FakeTunnelManager(startResult = Result.success("https://hermes-node.trycloudflare.com"))
+        val vm = ServerViewModel(
+            tunnelManager = fakeTunnel,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        vm.onUpdatePublicTunnel(true)
+        assertTrue(vm.uiState.value.isPublicTunnelEnabled)
+        assertNull(vm.uiState.value.tunnelUrl)
 
-        viewModel.onStartServer()
+        vm.onStartServer()
         advanceTimeBy(650)
 
-        val runningState = viewModel.uiState.value
+        val runningState = vm.uiState.value
         assertEquals(ServerStatus.RUNNING, runningState.status)
         assertEquals("https://hermes-node.trycloudflare.com", runningState.tunnelUrl)
 
-        viewModel.onStopServer()
+        vm.onStopServer()
         advanceTimeBy(450)
 
-        val stoppedState = viewModel.uiState.value
+        val stoppedState = vm.uiState.value
         assertEquals(ServerStatus.STOPPED, stoppedState.status)
         assertNull(stoppedState.tunnelUrl)
+
+        vm.stopMonitoring()
     }
 
     @Test
@@ -240,25 +253,33 @@ class ServerViewModelTest {
 
     @Test
     fun onSetError_resetsMetricsAndTunnelUrl() = runTest(testDispatcher) {
-        viewModel.onUpdatePublicTunnel(true)
-        viewModel.onStartServer()
+        val fakeTunnel = FakeTunnelManager(startResult = Result.success("https://hermes-node.trycloudflare.com"))
+        val vm = ServerViewModel(
+            tunnelManager = fakeTunnel,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        vm.onUpdatePublicTunnel(true)
+        vm.onStartServer()
         advanceTimeBy(650)
         advanceTimeBy(2000)
 
-        val runningState = viewModel.uiState.value
+        val runningState = vm.uiState.value
         assertEquals(ServerStatus.RUNNING, runningState.status)
         assertTrue(runningState.uptimeSeconds > 0L)
         assertNotNull(runningState.tunnelUrl)
 
-        viewModel.onSetError("Fatal error encountered")
+        vm.onSetError("Fatal error encountered")
 
-        val errorState = viewModel.uiState.value
+        val errorState = vm.uiState.value
         assertEquals(ServerStatus.ERROR, errorState.status)
         assertEquals(0L, errorState.uptimeSeconds)
         assertEquals(0f, errorState.cpuUsagePercent, 0.001f)
         assertEquals(0L, errorState.memoryUsageMb)
         assertNull(errorState.tunnelUrl)
         assertEquals("Fatal error encountered", errorState.errorMessage)
+
+        vm.stopMonitoring()
     }
 
     @Test
@@ -1742,6 +1763,158 @@ class ServerViewModelTest {
         assertEquals("8888", state.restApiPort)
 
         vm.stopMonitoring()
+    }
+
+    @Test
+    fun onStartServer_withTunnelEnabled_startsTunnelManager_andUpdatesUiState() = runTest(testDispatcher) {
+        val fakeTunnelManager = FakeTunnelManager()
+        val vm = ServerViewModel(
+            tunnelManager = fakeTunnelManager,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onUpdatePublicTunnel(true)
+        vm.onStartServer()
+        advanceTimeBy(700)
+
+        assertEquals(1, fakeTunnelManager.startCalls)
+        assertEquals("https://fake-tunnel.trycloudflare.com", vm.uiState.value.tunnelUrl)
+        assertTrue(vm.uiState.value.tunnelState is TunnelState.Running)
+        assertTrue(vm.uiState.value.logs.any { it.message.contains("Cloudflare Tunnel connected") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onStartServer_withTunnelDisabled_doesNotStartTunnelManager() = runTest(testDispatcher) {
+        val fakeTunnelManager = FakeTunnelManager()
+        val vm = ServerViewModel(
+            tunnelManager = fakeTunnelManager,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onUpdatePublicTunnel(false)
+        vm.onStartServer()
+        advanceTimeBy(700)
+
+        assertEquals(0, fakeTunnelManager.startCalls)
+        assertNull(vm.uiState.value.tunnelUrl)
+        assertEquals(TunnelState.Stopped, vm.uiState.value.tunnelState)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onUpdatePublicTunnel_whileServerRunning_dynamicallyStartsAndStopsTunnel() = runTest(testDispatcher) {
+        val fakeTunnelManager = FakeTunnelManager()
+        val vm = ServerViewModel(
+            tunnelManager = fakeTunnelManager,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onUpdatePublicTunnel(false)
+        vm.onStartServer()
+        advanceTimeBy(700)
+        assertEquals(0, fakeTunnelManager.startCalls)
+
+        // Dynamically enable
+        vm.onUpdatePublicTunnel(true)
+        advanceTimeBy(100)
+        assertEquals(1, fakeTunnelManager.startCalls)
+        assertEquals("https://fake-tunnel.trycloudflare.com", vm.uiState.value.tunnelUrl)
+
+        // Dynamically disable
+        vm.onUpdatePublicTunnel(false)
+        advanceTimeBy(100)
+        assertEquals(1, fakeTunnelManager.stopCalls)
+        assertNull(vm.uiState.value.tunnelUrl)
+        assertEquals(TunnelState.Stopped, vm.uiState.value.tunnelState)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onStopServer_stopsActiveTunnel() = runTest(testDispatcher) {
+        val fakeTunnelManager = FakeTunnelManager()
+        val vm = ServerViewModel(
+            tunnelManager = fakeTunnelManager,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onUpdatePublicTunnel(true)
+        vm.onStartServer()
+        advanceTimeBy(700)
+        assertEquals(1, fakeTunnelManager.startCalls)
+
+        vm.onStopServer()
+        advanceTimeBy(500)
+
+        assertTrue(fakeTunnelManager.stopCalls >= 1)
+        assertNull(vm.uiState.value.tunnelUrl)
+        assertEquals(TunnelState.Stopped, vm.uiState.value.tunnelState)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onShowAndDismissQrCodeDialog_updatesUiState() = runTest(testDispatcher) {
+        val vm = ServerViewModel(
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertFalse(vm.uiState.value.showQrCodeDialog)
+
+        vm.onShowQrCodeDialog()
+        assertTrue(vm.uiState.value.showQrCodeDialog)
+
+        vm.onDismissQrCodeDialog()
+        assertFalse(vm.uiState.value.showQrCodeDialog)
+
+        vm.stopMonitoring()
+    }
+
+    private class FakeTunnelManager(
+        var startResult: Result<String> = Result.success("https://fake-tunnel.trycloudflare.com"),
+        var stopResult: Result<Unit> = Result.success(Unit)
+    ) : TunnelManagerInterface {
+        private val _state = MutableStateFlow<TunnelState>(TunnelState.Stopped)
+        override val state: StateFlow<TunnelState> = _state.asStateFlow()
+
+        private val _tunnelUrl = MutableStateFlow<String?>(null)
+        override val tunnelUrl: StateFlow<String?> = _tunnelUrl.asStateFlow()
+
+        override val isRunning: Boolean
+            get() = _state.value is TunnelState.Running
+
+        var startCalls = 0
+        var stopCalls = 0
+        var lastPort: Int? = null
+
+        override suspend fun start(port: Int): Result<String> {
+            startCalls++
+            lastPort = port
+            if (startResult.isSuccess) {
+                val url = startResult.getOrThrow()
+                _tunnelUrl.value = url
+                _state.value = TunnelState.Running(url)
+            } else {
+                _tunnelUrl.value = null
+                _state.value = TunnelState.Error(startResult.exceptionOrNull()?.message ?: "Failed to start tunnel")
+            }
+            return startResult
+        }
+
+        override suspend fun stop(timeoutMs: Long): Result<Unit> {
+            stopCalls++
+            _tunnelUrl.value = null
+            _state.value = TunnelState.Stopped
+            return stopResult
+        }
     }
 
     private class FakeTelemetryCollector(
