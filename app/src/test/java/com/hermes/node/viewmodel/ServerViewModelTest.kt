@@ -21,7 +21,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -1862,19 +1864,82 @@ class ServerViewModelTest {
 
     @Test
     fun onShowAndDismissQrCodeDialog_updatesUiState() = runTest(testDispatcher) {
+        val fakeTunnel = FakeTunnelManager()
         val vm = ServerViewModel(
+            tunnelManager = fakeTunnel,
             defaultDispatcher = testDispatcher,
             ioDispatcher = testDispatcher
         )
-
+        // Without active tunnel, dialog should not open (guard)
+        assertFalse(vm.uiState.value.showQrCodeDialog)
+        vm.onShowQrCodeDialog()
         assertFalse(vm.uiState.value.showQrCodeDialog)
 
+        // With active tunnel, dialog should open
+        vm.onUpdatePublicTunnel(true)
+        vm.onStartServer()
+        advanceTimeBy(700)
+        assertTrue(vm.uiState.value.tunnelState is TunnelState.Running)
         vm.onShowQrCodeDialog()
         assertTrue(vm.uiState.value.showQrCodeDialog)
 
         vm.onDismissQrCodeDialog()
         assertFalse(vm.uiState.value.showQrCodeDialog)
 
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onShowQrCodeDialog_guardDoesNotOpenWhenNoUrl() = runTest(testDispatcher) {
+        val vm = ServerViewModel(
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        vm.onShowQrCodeDialog()
+        assertFalse(vm.uiState.value.showQrCodeDialog)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun tunnelStartFailure_setsErrorStateAndLogsWarning() = runTest(testDispatcher) {
+        val fakeTunnel = FakeTunnelManager(startResult = Result.failure(IllegalStateException("binary missing")))
+        val vm = ServerViewModel(
+            tunnelManager = fakeTunnel,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        vm.onUpdatePublicTunnel(true)
+        vm.onStartServer()
+        advanceTimeBy(700)
+        assertTrue(vm.uiState.value.tunnelState is TunnelState.Error)
+        assertNull(vm.uiState.value.tunnelUrl)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status) // server still running
+        assertTrue(vm.uiState.value.logs.any { it.message.contains("Cloudflare Tunnel error") })
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun tunnelError_clearsQrDialogFlag() = runTest(testDispatcher) {
+        val fakeTunnel = FakeTunnelManager()
+        val vm = ServerViewModel(
+            tunnelManager = fakeTunnel,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        vm.onUpdatePublicTunnel(true)
+        vm.onStartServer()
+        advanceTimeBy(700)
+        // Force Running state with URL so dialog can be shown
+        fakeTunnel.emitRunning("https://fake-tunnel.trycloudflare.com")
+        runCurrent()
+        vm.onShowQrCodeDialog()
+        assertTrue(vm.uiState.value.showQrCodeDialog)
+        // Simulate tunnel error via state flow — observer should clear dialog and URL
+        fakeTunnel.emitError("network")
+        runCurrent()
+        assertFalse(vm.uiState.value.showQrCodeDialog)
+        assertNull(vm.uiState.value.tunnelUrl)
+        assertTrue(vm.uiState.value.tunnelState is TunnelState.Error)
         vm.stopMonitoring()
     }
 
@@ -1914,6 +1979,16 @@ class ServerViewModelTest {
             _tunnelUrl.value = null
             _state.value = TunnelState.Stopped
             return stopResult
+        }
+
+        fun emitRunning(url: String) {
+            _tunnelUrl.value = url
+            _state.value = TunnelState.Running(url)
+        }
+
+        fun emitError(message: String) {
+            _tunnelUrl.value = null
+            _state.value = TunnelState.Error(message)
         }
     }
 

@@ -110,10 +110,41 @@ object QrCodeGenerator {
         return ecc
     }
 
+    // Version info BCH(18,6) — precomputed for versions 7..10 (ISO/IEC 18004 Table D.1)
+    private val VERSION_INFO_BITS = mapOf(
+        7 to 0x07C94,
+        8 to 0x08560,
+        9 to 0x09A99,
+        10 to 0x0A4D3
+    )
+
+    private fun getVersionInfoBits(version: Int): Int {
+        VERSION_INFO_BITS[version]?.let { return it }
+        // Fallback BCH calculation for any version 7..40 (generator 0x1F25)
+        var d = version shl 12
+        val g = 0x1F25
+        var msb = 1 shl 17
+        // Find highest set bit to align divisor
+        fun highestBit(v: Int): Int {
+            var b = 0
+            var x = v
+            while (x > 0) { b++; x = x shr 1 }
+            return b
+        }
+        while (highestBit(d) >= highestBit(g)) {
+            val shift = highestBit(d) - highestBit(g)
+            d = d xor (g shl shift)
+        }
+        return (version shl 12) or d
+    }
+
     /**
      * Generates a QR Code matrix from text using ErrorCorrectionLevel.M.
+     * Only M is currently supported — L/Q/H are accepted but rejected to avoid silent mis-encoding.
      */
     fun encode(text: String, level: ErrorCorrectionLevel = ErrorCorrectionLevel.M): QrMatrix {
+        require(level == ErrorCorrectionLevel.M) { "Only ErrorCorrectionLevel.M is supported (requested $level)" }
+        require(text.all { it.code < 128 }) { "Only ASCII is supported — tunnel URLs are ASCII; non-ASCII requires ECI" }
         val rawBytes = text.toByteArray(Charsets.UTF_8)
         require(rawBytes.size <= CAPACITIES_M[10]) {
             "Text exceeds maximum supported QR capacity of ${CAPACITIES_M[10]} bytes"
@@ -266,12 +297,30 @@ object QrCodeGenerator {
         // Dark module
         setModule(8, 4 * version + 9, true)
 
-        // Reserve Format Information areas
-        for (i in 0..8) {
-            isFunction[8][i] = true
+        // Reserve Format Information areas — exactly 15 modules per copy (ISO/IEC 18004)
+        // First copy: (8,0..5), (8,7), (8,8), (7,8), (5..0,8)
+        for (i in 0..5) {
             isFunction[i][8] = true
-            isFunction[8][matrixSize - 1 - i] = true
+            isFunction[8][i] = true
+        }
+        isFunction[7][8] = true
+        isFunction[8][8] = true
+        isFunction[8][7] = true
+        // Second copy: vertical (size-1 .. size-7, 8) and horizontal (8, size-8 .. size-1)
+        for (i in 0..6) {
             isFunction[matrixSize - 1 - i][8] = true
+        }
+        for (i in 0..7) {
+            isFunction[8][matrixSize - 1 - i] = true
+        }
+        // Version information (required for version >= 7) — two 6x3 blocks
+        if (version >= 7) {
+            for (y in 0..5) {
+                for (x in 0..2) {
+                    isFunction[y][matrixSize - 11 + x] = true
+                    isFunction[matrixSize - 11 + x][y] = true
+                }
+            }
         }
 
         // 9. Place Data bits
@@ -289,7 +338,7 @@ object QrCodeGenerator {
             for (vert in 0 until matrixSize) {
                 for (j in 0..1) {
                     val x = right - j
-                    val upward = ((right + 1) / 2) % 2 == 1
+                    val upward = ((right + 1) / 2) % 2 == 0
                     val y = if (upward) matrixSize - 1 - vert else vert
                     if (!isFunction[y][x]) {
                         val bit = if (bitIndex < finalBits.size) finalBits[bitIndex++] else 0
@@ -304,15 +353,55 @@ object QrCodeGenerator {
 
         // 10. Format information: ECC M (00) + Mask 0 (000) = 0b00000 -> BCH format 0x5412
         val formatBits = 0x5412
-        for (i in 0..14) {
-            val bit = ((formatBits ushr (14 - i)) and 1) == 1
-            if (i < 6) setModule(8, i, bit)
-            else if (i == 6) setModule(8, 7, bit)
-            else if (i < 9) setModule(8, 8 - (i - 7), bit)
-            else setModule(8 - (i - 8), 8, bit)
+        // First copy
+        for (i in 0..5) {
+            val bit = ((formatBits ushr i) and 1) == 1
+            setModule(8, i, bit)
+        }
+        run {
+            val bit6 = ((formatBits ushr 6) and 1) == 1
+            setModule(8, 7, bit6)
+        }
+        run {
+            val bit7 = ((formatBits ushr 7) and 1) == 1
+            setModule(8, 8, bit7)
+        }
+        run {
+            val bit8 = ((formatBits ushr 8) and 1) == 1
+            setModule(7, 8, bit8)
+        }
+        for (i in 9..14) {
+            val bit = ((formatBits ushr i) and 1) == 1
+            // Maps 9..14 -> (5,8)..(0,8)
+            setModule(14 - i, 8, bit)
+        }
+        // Second copy: bits 0..6 vertical at (8, size-1 .. size-7), bits 7..14 horizontal at (size-8 .. size-1, 8)
+        for (i in 0..6) {
+            val bit = ((formatBits ushr i) and 1) == 1
+            setModule(8, matrixSize - 1 - i, bit)
+        }
+        for (i in 7..14) {
+            val bit = ((formatBits ushr i) and 1) == 1
+            setModule(matrixSize - 15 + i, 8, bit)
+        }
 
-            if (i < 8) setModule(matrixSize - 1 - i, 8, bit)
-            else setModule(8, matrixSize - 15 + i, bit)
+        // 11. Version information for version >= 7 (BCH(18,6) with generator 0x1F25)
+        if (version >= 7) {
+            val versionInfo = getVersionInfoBits(version)
+            // Top-right block
+            for (i in 0..17) {
+                val bit = ((versionInfo ushr i) and 1) == 1
+                val x = matrixSize - 11 + (i % 3)
+                val y = i / 3
+                setModule(x, y, bit, func = true)
+            }
+            // Bottom-left block
+            for (i in 0..17) {
+                val bit = ((versionInfo ushr i) and 1) == 1
+                val y = matrixSize - 11 + (i % 3)
+                val x = i / 3
+                setModule(x, y, bit, func = true)
+            }
         }
 
         return QrMatrix(size = matrixSize, modules = modules)

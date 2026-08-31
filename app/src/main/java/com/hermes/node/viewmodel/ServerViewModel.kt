@@ -51,8 +51,8 @@ class ServerViewModel(
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val serviceRunningFlow: StateFlow<Boolean>? = null,
-    private val startServiceAction: ((Context) -> Unit)? = { ctx -> try { HermesServerService.start(ctx) } catch (_: Throwable) {} },
-    private val stopServiceAction: ((Context) -> Unit)? = { ctx -> try { HermesServerService.stop(ctx) } catch (_: Throwable) {} },
+    private val startServiceAction: ((Context) -> Unit)? = { ctx -> try { HermesServerService.start(ctx) } catch (_: Exception) {} },
+    private val stopServiceAction: ((Context) -> Unit)? = { ctx -> try { HermesServerService.stop(ctx) } catch (_: Exception) {} },
     private val batteryOptimizationHelper: BatteryOptimizationHelperInterface? = BatteryOptimizationHelper(),
     private val logStreamer: LogStreamerInterface? = null,
     private val telemetryCollector: TelemetryCollector? = null,
@@ -437,8 +437,18 @@ class ServerViewModel(
             if (_uiState.value.isPublicTunnelEnabled) {
                 onAddLog("Starting Cloudflare Public Tunnel...", LogLevel.INFO)
                 tunnelControlJob?.cancel()
-                tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
-                    effectiveTunnelManager?.start(port)
+                val mgr = effectiveTunnelManager
+                if (mgr == null) {
+                    _uiState.update { it.copy(tunnelState = TunnelState.Error("Tunnel manager unavailable")) }
+                    onAddLog("Cloudflare Tunnel error: Tunnel manager unavailable", LogLevel.WARN)
+                } else {
+                    tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
+                        val result = mgr.start(port)
+                        // Error logging is handled centrally by observeTunnelState to avoid duplicates
+                        if (result.isFailure) {
+                            // No direct log here — observer will emit TunnelState.Error and log once
+                        }
+                    }
                 }
             }
             if (_uiState.value.isRestApiEnabled) {
@@ -471,8 +481,13 @@ class ServerViewModel(
         metricsJob = null
         transitionJob?.cancel()
         tunnelControlJob?.cancel()
+        val mgrToStop = effectiveTunnelManager
         tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
-            effectiveTunnelManager?.stop()
+            val res = mgrToStop?.stop()
+            if (res != null && res.isFailure) {
+                _uiState.update { it.copy(tunnelState = TunnelState.Error(res.exceptionOrNull()?.message ?: "Failed to stop tunnel")) }
+                onAddLog("Cloudflare Tunnel stop failed: ${res.exceptionOrNull()?.message}", LogLevel.WARN)
+            }
         }
 
         _uiState.update { it.copy(status = ServerStatus.STOPPING) }
@@ -894,20 +909,36 @@ class ServerViewModel(
         }
         if (_uiState.value.status == ServerStatus.RUNNING) {
             tunnelControlJob?.cancel()
-            tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
-                if (enabled) {
-                    onAddLog("Starting Cloudflare Public Tunnel...", LogLevel.INFO)
-                    effectiveTunnelManager?.start(port)
+            val mgr = effectiveTunnelManager
+            if (enabled) {
+                if (mgr == null) {
+                    _uiState.update { it.copy(tunnelState = TunnelState.Error("Tunnel manager unavailable")) }
+                    onAddLog("Cloudflare Tunnel error: Tunnel manager unavailable", LogLevel.WARN)
                 } else {
-                    onAddLog("Stopping Cloudflare Public Tunnel...", LogLevel.INFO)
-                    effectiveTunnelManager?.stop()
+                    onAddLog("Starting Cloudflare Public Tunnel...", LogLevel.INFO)
+                    tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
+                        mgr.start(port)
+                        // Error logged via observeTunnelState
+                    }
+                }
+            } else {
+                onAddLog("Stopping Cloudflare Public Tunnel...", LogLevel.INFO)
+                if (mgr != null) {
+                    tunnelControlJob = viewModelScope.launch(defaultDispatcher) {
+                        mgr.stop()
+                    }
+                } else {
+                    _uiState.update { it.copy(tunnelUrl = null, tunnelState = TunnelState.Stopped, showQrCodeDialog = false) }
                 }
             }
         }
     }
 
     fun onShowQrCodeDialog() {
-        _uiState.update { it.copy(showQrCodeDialog = true) }
+        val cur = _uiState.value
+        if (cur.tunnelUrl != null && cur.tunnelState is TunnelState.Running) {
+            _uiState.update { it.copy(showQrCodeDialog = true) }
+        }
     }
 
     fun onDismissQrCodeDialog() {
@@ -950,7 +981,14 @@ class ServerViewModel(
     }
 
     private fun observeTunnelState() {
-        val manager = effectiveTunnelManager ?: return
+        val manager = effectiveTunnelManager
+        if (manager == null) {
+            if (_uiState.value.isPublicTunnelEnabled) {
+                _uiState.update { it.copy(tunnelState = TunnelState.Error("Tunnel manager unavailable")) }
+                onAddLog("Cloudflare Tunnel error: Tunnel manager unavailable", LogLevel.WARN)
+            }
+            return
+        }
         tunnelObserverJob?.cancel()
         tunnelObserverJob = viewModelScope.launch {
             manager.state.collect { tState ->
@@ -960,14 +998,14 @@ class ServerViewModel(
                         onAddLog("Cloudflare Tunnel connected: ${tState.url}", LogLevel.INFO)
                     }
                     is TunnelState.Error -> {
-                        _uiState.update { it.copy(tunnelUrl = null, tunnelState = tState) }
+                        _uiState.update { it.copy(tunnelUrl = null, tunnelState = tState, showQrCodeDialog = false) }
                         onAddLog("Cloudflare Tunnel error: ${tState.message}", LogLevel.WARN)
                     }
                     is TunnelState.Starting -> {
                         _uiState.update { it.copy(tunnelState = tState) }
                     }
                     is TunnelState.Stopped -> {
-                        _uiState.update { it.copy(tunnelUrl = null, tunnelState = tState) }
+                        _uiState.update { it.copy(tunnelUrl = null, tunnelState = tState, showQrCodeDialog = false) }
                     }
                 }
             }
@@ -1083,8 +1121,21 @@ class ServerViewModel(
         telemetryJob = null
         tunnelObserverJob?.cancel()
         tunnelObserverJob = null
-        tunnelControlJob?.cancel()
-        tunnelControlJob = null
+        val managerToStop = effectiveTunnelManager
+        if (managerToStop != null) {
+            tunnelControlJob?.cancel()
+            tunnelControlJob = viewModelScope.launch(ioDispatcher) {
+                try {
+                    val res = managerToStop.stop()
+                    if (res.isFailure) {
+                        onAddLog("Cloudflare Tunnel stop failed on cleanup: ${res.exceptionOrNull()?.message}", LogLevel.WARN)
+                    }
+                } catch (_: Throwable) {}
+            }
+        } else {
+            tunnelControlJob?.cancel()
+            tunnelControlJob = null
+        }
         serviceObserverJob?.cancel()
         serviceObserverJob = null
         processObserverJob?.cancel()

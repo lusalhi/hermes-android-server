@@ -2,6 +2,7 @@ package com.hermes.node.engine
 
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +13,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.BufferedReader
@@ -67,107 +70,180 @@ class CloudflareTunnelManager(
     private var processWatcherJob: Job? = null
     private var isIntentionalStop = false
     private var scope = CoroutineScope(ioDispatcher + SupervisorJob())
+    private val lifecycleMutex = Mutex()
+    private var generation: Long = 0L
 
     override suspend fun start(port: Int): Result<String> = withContext(ioDispatcher) {
-        if (_state.value is TunnelState.Running) {
-            val currentUrl = _tunnelUrl.value
-            if (currentUrl != null) {
-                return@withContext Result.success(currentUrl)
-            }
-        }
-
-        stopInternal(preserveError = false)
-
-        isIntentionalStop = false
-        _state.value = TunnelState.Starting
-        _tunnelUrl.value = null
-
-        val cloudflaredBinary = resolveCloudflaredBinary()
-        val targetPort = if (port in 1..65535) port else 8000
-
-        val config = ProcessConfig(
-            executable = cloudflaredBinary.absolutePath,
-            arguments = listOf("tunnel", "--url", "http://127.0.0.1:$targetPort", "--no-autoupdate"),
-            workingDir = filesDir,
-            redirectErrorStream = true
-        )
-
+        // Phase 1: synchronized setup
+        val setup: Triple<Process, CompletableDeferred<String>, Long>
         try {
-            val process = processRunner.run(config)
-            activeProcess = process
-
-            val urlDeferred = kotlinx.coroutines.CompletableDeferred<String>()
-
-            processWatcherJob = scope.launch {
-                val stream = process.inputStream
-                try {
-                    val reader = BufferedReader(InputStreamReader(stream, Charsets.UTF_8))
-                    var line: String? = null
-                    while (reader.readLine().also { line = it } != null) {
-                        val currentLine = line ?: continue
-                        val extracted = extractTunnelUrl(currentLine)
-                        if (extracted != null && !urlDeferred.isCompleted) {
-                            urlDeferred.complete(extracted)
+            setup = lifecycleMutex.withLock {
+                if (_state.value is TunnelState.Running) {
+                    val currentUrl = _tunnelUrl.value
+                    if (currentUrl != null) {
+                        return@withContext Result.success(currentUrl)
+                    }
+                }
+                stopInternalLocked(preserveError = false)
+                isIntentionalStop = false
+                _state.value = TunnelState.Starting
+                _tunnelUrl.value = null
+                val cloudflaredBinary = resolveCloudflaredBinary()
+                val targetPort = if (port in 1..65535) port else 8000
+                val config = ProcessConfig(
+                    executable = cloudflaredBinary.absolutePath,
+                    arguments = listOf("tunnel", "--url", "http://127.0.0.1:$targetPort", "--no-autoupdate"),
+                    workingDir = filesDir,
+                    redirectErrorStream = false
+                )
+                val process = processRunner.run(config)
+                activeProcess = process
+                val myGeneration = ++generation
+                val urlDeferred = CompletableDeferred<String>()
+                processWatcherJob = scope.launch {
+                    val stdoutJob = launch {
+                        try {
+                            BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8)).use { reader ->
+                                var line: String?
+                                while (reader.readLine().also { line = it } != null) {
+                                    val extracted = extractTunnelUrl(line!!)
+                                    if (extracted != null && !urlDeferred.isCompleted) {
+                                        urlDeferred.complete(extracted)
+                                    }
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Throwable) {}
+                    }
+                    val stderrJob = launch {
+                        try {
+                            BufferedReader(InputStreamReader(process.errorStream, Charsets.UTF_8)).use { reader ->
+                                var line: String?
+                                while (reader.readLine().also { line = it } != null) {
+                                    val extracted = extractTunnelUrl(line!!)
+                                    if (extracted != null && !urlDeferred.isCompleted) {
+                                        urlDeferred.complete(extracted)
+                                    }
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Throwable) {}
+                    }
+                    try {
+                        stdoutJob.join()
+                        stderrJob.join()
+                    } finally {
+                        stdoutJob.cancel()
+                        stderrJob.cancel()
+                        try { process.inputStream.close() } catch (_: Throwable) {}
+                        try { process.errorStream.close() } catch (_: Throwable) {}
+                        if (!urlDeferred.isCompleted) {
+                            urlDeferred.completeExceptionally(
+                                IllegalStateException("cloudflared process terminated before URL was discovered")
+                            )
+                        }
+                        if (myGeneration == generation) {
+                            scope.launch { handleProcessExit() }
                         }
                     }
-                } catch (e: Throwable) {
-                    if (e is CancellationException) throw e
-                } finally {
-                    try {
-                        stream.close()
-                    } catch (_: Throwable) {}
-                    if (!urlDeferred.isCompleted) {
-                        urlDeferred.completeExceptionally(
-                            IllegalStateException("cloudflared process terminated before URL was discovered")
-                        )
-                    }
-                    handleProcessExit()
                 }
-            }
-
-            val discoveredUrl = try {
-                withTimeoutOrNull(urlDiscoveryTimeoutMs) {
-                    urlDeferred.await()
-                }
-            } catch (e: Throwable) {
-                if (e is CancellationException) {
-                    stopInternal(preserveError = false)
-                    throw e
-                }
-                null
-            }
-
-            if (discoveredUrl != null) {
-                _tunnelUrl.value = discoveredUrl
-                _state.value = TunnelState.Running(discoveredUrl)
-                Result.success(discoveredUrl)
-            } else {
-                val errorMsg = "Timed out waiting for Cloudflare Tunnel URL after ${urlDiscoveryTimeoutMs / 1000}s"
-                stopInternal(preserveError = true)
-                _state.value = TunnelState.Error(errorMsg)
-                Result.failure(IllegalStateException(errorMsg))
+                Triple(process, urlDeferred, myGeneration)
             }
         } catch (e: Throwable) {
             if (e is CancellationException) throw e
-            val errorMsg = "Failed to start Cloudflare Tunnel: ${e.message}"
-            stopInternal(preserveError = true)
-            _state.value = TunnelState.Error(errorMsg)
-            _tunnelUrl.value = null
-            Result.failure(e)
+            lifecycleMutex.withLock {
+                val errorMsg = "Failed to start Cloudflare Tunnel: ${e.message}"
+                stopInternalLocked(preserveError = true)
+                _state.value = TunnelState.Error(errorMsg)
+                _tunnelUrl.value = null
+            }
+            return@withContext Result.failure(e)
+        }
+        val (process, urlDeferred, myGeneration) = setup
+        // Phase 2: await URL outside lock
+        var discoveryException: Throwable? = null
+        val discoveredUrl: String? = try {
+            withTimeoutOrNull(urlDiscoveryTimeoutMs) {
+                try {
+                    urlDeferred.await()
+                } catch (e: Throwable) {
+                    if (e is CancellationException) throw e
+                    discoveryException = e
+                    null
+                }
+            }
+        } catch (e: CancellationException) {
+            lifecycleMutex.withLock { stopInternalLocked(preserveError = false) }
+            throw e
+        }
+        // Phase 3: synchronized completion with generation check
+        return@withContext lifecycleMutex.withLock {
+            if (myGeneration != generation) {
+                return@withLock Result.failure(CancellationException("Tunnel generation superseded"))
+            }
+            if (discoveredUrl != null) {
+                if (!process.isAlive) {
+                    val exitVal = try { process.exitValue() } catch (_: Throwable) { null }
+                    val errMsg = if (discoveryException != null) {
+                        "Cloudflare tunnel exited before URL could be used: ${discoveryException?.message} (exit=$exitVal)"
+                    } else if (exitVal != null && exitVal != 0) {
+                        "Cloudflare tunnel exited unexpectedly with code $exitVal after publishing URL"
+                    } else {
+                        "Cloudflare tunnel terminated immediately after publishing URL"
+                    }
+                    _state.value = TunnelState.Error(errMsg)
+                    _tunnelUrl.value = null
+                    stopInternalLocked(preserveError = true)
+                    Result.failure(IllegalStateException(errMsg))
+                } else {
+                    _tunnelUrl.value = discoveredUrl
+                    _state.value = TunnelState.Running(discoveredUrl)
+                    Result.success(discoveredUrl)
+                }
+            } else {
+                if (discoveryException != null) {
+                    val errMsg = "Cloudflare tunnel terminated before URL discovery: ${discoveryException?.message}"
+                    stopInternalLocked(preserveError = true)
+                    _state.value = TunnelState.Error(errMsg)
+                    Result.failure(discoveryException ?: IllegalStateException(errMsg))
+                } else {
+                    val errorMsg = "Timed out waiting for Cloudflare Tunnel URL after ${urlDiscoveryTimeoutMs / 1000}s"
+                    stopInternalLocked(preserveError = true)
+                    _state.value = TunnelState.Error(errorMsg)
+                    Result.failure(IllegalStateException(errorMsg))
+                }
+            }
         }
     }
 
     override suspend fun stop(timeoutMs: Long): Result<Unit> = withContext(ioDispatcher) {
-        stopInternal(preserveError = false, timeoutMs = timeoutMs)
-        Result.success(Unit)
+        var stillAlive = false
+        lifecycleMutex.withLock {
+            stillAlive = stopInternalLocked(preserveError = false, timeoutMs = timeoutMs)
+        }
+        if (stillAlive) {
+            Result.failure(IllegalStateException("Tunnel process still alive after SIGTERM/SIGKILL"))
+        } else {
+            Result.success(Unit)
+        }
     }
 
     private suspend fun stopInternal(preserveError: Boolean, timeoutMs: Long = 5000L) {
+        lifecycleMutex.withLock {
+            stopInternalLocked(preserveError, timeoutMs)
+        }
+    }
+
+    private suspend fun stopInternalLocked(preserveError: Boolean, timeoutMs: Long = 5000L): Boolean {
         isIntentionalStop = !preserveError
+        generation++
         val process = activeProcess
         processWatcherJob?.cancel()
         processWatcherJob = null
 
+        var stillAlive = false
         if (process != null && process.isAlive) {
             try {
                 process.destroy()
@@ -181,15 +257,33 @@ class CloudflareTunnelManager(
                     process.destroyForcibly()
                 } catch (_: Throwable) {}
             }
+            stillAlive = process.isAlive
         }
-        activeProcess = null
+        // Retain handle if still alive so caller can retry — do not orphan
+        if (!stillAlive) {
+            activeProcess = null
+        }
         if (!preserveError) {
-            _state.value = TunnelState.Stopped
+            if (stillAlive) {
+                _state.value = TunnelState.Error("Tunnel process still alive after SIGTERM/SIGKILL")
+            } else {
+                _state.value = TunnelState.Stopped
+                activeProcess = null
+            }
+        } else {
+            if (!stillAlive) activeProcess = null
         }
         _tunnelUrl.value = null
+        return stillAlive
     }
 
-    private fun handleProcessExit() {
+    private suspend fun handleProcessExit() {
+        lifecycleMutex.withLock {
+            handleProcessExitLocked()
+        }
+    }
+
+    private fun handleProcessExitLocked() {
         if (isIntentionalStop) return
         if (_state.value is TunnelState.Running || _state.value is TunnelState.Starting) {
             val exitVal = try {
@@ -199,6 +293,8 @@ class CloudflareTunnelManager(
             }
             if (exitVal != null && exitVal != 0) {
                 _state.value = TunnelState.Error("Cloudflare tunnel exited unexpectedly with code $exitVal")
+            } else if (_state.value is TunnelState.Starting) {
+                _state.value = TunnelState.Error("Cloudflare tunnel terminated before URL was discovered")
             } else {
                 _state.value = TunnelState.Stopped
             }
@@ -216,25 +312,14 @@ class CloudflareTunnelManager(
     }
 
     private fun resolveCloudflaredBinary(): File {
-        val candidates = listOf(
-            File(filesDir, "usr/bin/cloudflared"),
-            File(filesDir, "bin/cloudflared"),
-            File(filesDir, "cloudflared"),
-            File("/system/bin/cloudflared"),
-            File("/usr/local/bin/cloudflared"),
-            File("/usr/bin/cloudflared")
-        )
-        return candidates.firstOrNull { it.exists() && it.canExecute() }
-            ?: File(filesDir, "usr/bin/cloudflared")
+        val canonical = File(filesDir, "usr/bin/cloudflared")
+        return canonical
     }
 
     companion object {
         private const val TAG = "TunnelManager"
         private val TUNNEL_URL_REGEX = Regex("""https://[a-zA-Z0-9.-]+\.trycloudflare\.com""")
 
-        /**
-         * Extracts trycloudflare.com URL from log output line.
-         */
         fun extractTunnelUrl(logLine: String): String? {
             return TUNNEL_URL_REGEX.find(logLine)?.value
         }

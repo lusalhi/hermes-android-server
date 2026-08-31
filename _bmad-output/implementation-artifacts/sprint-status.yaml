@@ -60,7 +60,7 @@ development_status:
 
   epic-5: in-progress
   5-1-multi-platform-messaging-gateway-adapters-telegram-discord-s: done
-  5-2-managed-cloudflare-public-webhook-tunnel-sidecar: review
+  5-2-managed-cloudflare-public-webhook-tunnel-sidecar: done
   epic-5-retrospective: optional
 
   epic-6: backlog

@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.hermes.node.engine.TunnelState
 import com.hermes.node.ui.components.MetricCard
 import com.hermes.node.ui.components.QrCodeDialog
 import com.hermes.node.ui.components.RuntimeIntegrityCard
@@ -439,8 +440,8 @@ fun DashboardScreen(
             )
         }
 
-        // Active Cloudflare Public Tunnel Card (if enabled)
-        if (state.isPublicTunnelEnabled && state.tunnelUrl != null) {
+        // Cloudflare Public Tunnel Card — renders whenever public tunnel is enabled, reflecting live TunnelState
+        if (state.isPublicTunnelEnabled) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
@@ -461,7 +462,11 @@ fun DashboardScreen(
                             Icon(
                                 imageVector = Icons.Default.Sensors,
                                 contentDescription = "Tunnel",
-                                tint = HermesCyan,
+                                tint = when (state.tunnelState) {
+                                    is TunnelState.Error -> MaterialTheme.colorScheme.error
+                                    is TunnelState.Running -> HermesCyan
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                },
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
@@ -470,36 +475,62 @@ fun DashboardScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onBackground
                             )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            when (state.tunnelState) {
+                                is TunnelState.Starting -> CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = HermesCyan)
+                                is TunnelState.Running -> Icon(imageVector = Icons.Default.Sensors, contentDescription = "Running", tint = HermesCyan, modifier = Modifier.size(12.dp))
+                                is TunnelState.Error -> Icon(imageVector = Icons.Default.ErrorOutline, contentDescription = "Error", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
+                                else -> {}
+                            }
                         }
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = state.tunnelUrl,
-                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                            color = HermesCyanLight
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = { onShowQrCode?.invoke() }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.QrCode,
-                                contentDescription = "Show QR Code",
-                                tint = HermesCyan
+                        when {
+                            state.tunnelUrl != null -> Text(
+                                text = state.tunnelUrl!!,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                color = HermesCyanLight
+                            )
+                            state.tunnelState is TunnelState.Starting -> Text(
+                                text = "Starting tunnel — waiting for cloudflared...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            state.tunnelState is TunnelState.Error -> Text(
+                                text = (state.tunnelState as TunnelState.Error).message,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            else -> Text(
+                                text = if (state.status == com.hermes.node.viewmodel.ServerStatus.RUNNING) "Tunnel inactive" else "Enable server to start tunnel",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        IconButton(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Tunnel URL", state.tunnelUrl))
-                                Toast.makeText(context, "Copied Tunnel URL to clipboard", Toast.LENGTH_SHORT).show()
+                    }
+                    if (state.tunnelUrl != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { onShowQrCode?.invoke() }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.QrCode,
+                                    contentDescription = "Show QR Code",
+                                    tint = HermesCyan
+                                )
                             }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ContentCopy,
-                                contentDescription = "Copy URL",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            IconButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("Tunnel URL", state.tunnelUrl))
+                                    Toast.makeText(context, "Copied Tunnel URL to clipboard", Toast.LENGTH_SHORT).show()
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = "Copy URL",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }

@@ -51,7 +51,13 @@ fun QrCodeDialog(
 ) {
     val context = LocalContext.current
     val qrMatrix = remember(url) {
-        QrCodeGenerator.encode(url)
+        runCatching { QrCodeGenerator.encode(url) }.getOrElse {
+            // Fallback to error placeholder if URL exceeds capacity
+            QrCodeGenerator.encode("https://error.invalid")
+        }
+    }
+    val encodeFailed = remember(url) {
+        runCatching { QrCodeGenerator.encode(url) }.isFailure
     }
 
     AlertDialog(
@@ -100,12 +106,15 @@ fun QrCodeDialog(
                     Canvas(modifier = Modifier.size(196.dp)) {
                         val quietZone = 4
                         val totalModules = qrMatrix.size + quietZone * 2
-                        val moduleSize = size.width / totalModules
+                        val moduleSizePx = (size.width / totalModules).toInt().coerceAtLeast(1).toFloat()
+                        val contentSize = moduleSizePx * totalModules
+                        val offsetX = (size.width - contentSize) / 2f
+                        val offsetY = (size.height - contentSize) / 2f
 
                         drawRect(
                             color = Color.White,
-                            topLeft = Offset.Zero,
-                            size = size
+                            topLeft = Offset(offsetX, offsetY),
+                            size = Size(contentSize, contentSize)
                         )
 
                         for (y in 0 until qrMatrix.size) {
@@ -113,8 +122,8 @@ fun QrCodeDialog(
                                 if (qrMatrix[x, y]) {
                                     drawRect(
                                         color = Color.Black,
-                                        topLeft = Offset((x + quietZone) * moduleSize, (y + quietZone) * moduleSize),
-                                        size = Size(moduleSize, moduleSize)
+                                        topLeft = Offset(offsetX + (x + quietZone) * moduleSizePx, offsetY + (y + quietZone) * moduleSizePx),
+                                        size = Size(moduleSizePx, moduleSizePx)
                                     )
                                 }
                             }

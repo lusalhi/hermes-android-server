@@ -131,6 +131,80 @@ class TunnelManagerTest {
         assertTrue(fakeProcess.destroyCalled)
     }
 
+    @Test
+    fun stop_whenProcessIgnoresDestroy_callsDestroyForcibly() = runTest(testDispatcher) {
+        val logOutput = "INF https://stubborn-tunnel.trycloudflare.com\n"
+        val stubborn = object : Process() {
+            var destroyCalled = false
+            var forciblyCalled = false
+            private var alive = true
+            private val latch = CountDownLatch(1)
+            override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+            override fun getInputStream(): InputStream = ByteArrayInputStream(logOutput.toByteArray())
+            override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+            override fun waitFor(): Int { latch.await(); return 0 }
+            override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = latch.await(timeout, unit)
+            override fun exitValue(): Int { if (alive) throw IllegalThreadStateException("alive"); return 0 }
+            override fun destroy() { destroyCalled = true } // intentionally does not kill
+            override fun destroyForcibly(): Process { forciblyCalled = true; alive = false; latch.countDown(); return this }
+            override fun isAlive(): Boolean = alive
+        }
+        val runner = FakeProcessRunner(stubborn)
+        val manager = CloudflareTunnelManager(processRunner = runner, ioDispatcher = testDispatcher)
+        manager.start(8000)
+        assertTrue(manager.isRunning)
+        val result = manager.stop(timeoutMs = 100L)
+        assertTrue(result.isSuccess)
+        assertTrue(stubborn.destroyCalled)
+        assertTrue(stubborn.forciblyCalled)
+        assertEquals(TunnelState.Stopped, manager.state.value)
+    }
+
+    @Test
+    fun stop_whenProcessRemainsAliveEvenAfterForcible_setsErrorAndRetainsHandle() = runTest(testDispatcher) {
+        val logOutput = "INF https://never-dies.trycloudflare.com\n"
+        val immortal = object : Process() {
+            private var alive = true
+            override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+            override fun getInputStream(): InputStream = ByteArrayInputStream(logOutput.toByteArray())
+            override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+            override fun waitFor(): Int = 0
+            override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = false
+            override fun exitValue(): Int { throw IllegalThreadStateException("alive") }
+            override fun destroy() {}
+            override fun destroyForcibly(): Process = this
+            override fun isAlive(): Boolean = true
+        }
+        val runner = FakeProcessRunner(immortal)
+        val manager = CloudflareTunnelManager(processRunner = runner, ioDispatcher = testDispatcher)
+        manager.start(8000)
+        assertTrue(manager.isRunning)
+        val result = manager.stop(timeoutMs = 50L)
+        assertTrue(result.isFailure)
+        assertTrue(manager.state.value is TunnelState.Error)
+        assertEquals("Tunnel process still alive after SIGTERM/SIGKILL", (manager.state.value as TunnelState.Error).message)
+    }
+
+    @Test
+    fun start_whenProcessExitsImmediately_setsErrorNotTimeout() = runTest(testDispatcher) {
+        val logOutput = "INF No URL here\n"
+        val fakeProcess = FakeProcess(inStream = ByteArrayInputStream(logOutput.toByteArray())).apply {
+            // Simulate immediate exit before discovery
+            destroy() // mark dead quickly
+        }
+        // Need a process that is already dead and has no URL — manager should report termination error, not generic timeout
+        val runner = FakeProcessRunner(fakeProcess)
+        val manager = CloudflareTunnelManager(processRunner = runner, ioDispatcher = testDispatcher, urlDiscoveryTimeoutMs = 200L)
+        val result = manager.start(8000)
+        assertTrue(result.isFailure)
+        val state = manager.state.value
+        assertTrue(state is TunnelState.Error)
+        val msg = (state as TunnelState.Error).message
+        assertTrue(msg.contains("terminated before URL"))
+        assertFalse(msg.contains("Timed out"))
+        assertNull(manager.tunnelUrl.value)
+    }
+
     private class FakeProcessRunner(private val process: Process) : ProcessRunner {
         var lastExecutedConfig: ProcessConfig? = null
 

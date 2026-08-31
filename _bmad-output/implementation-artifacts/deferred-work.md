@@ -31,3 +31,8 @@
   summary: Display public tunnel URL in HermesServerService ongoing foreground notification.
   evidence: HermesServerService notification currently shows server status and port; adding the active tunnel URL allows users to quickly view or copy the public link while the app runs in the background.
 
+## Deferred from: code review of spec-5-2-managed-cloudflare-public-webhook-tunnel-sidecar.md (2026-08-31 — Hemat re-run)
+
+- **Exponential backoff auto-recovery (confirmed deferred):** Already tracked above — no duplicate action needed. Re-confirmed in hemat code review 2026-08-31.
+- **Notification tunnel URL (confirmed deferred):** Already tracked above — no duplicate action needed. Re-confirmed in hemat code review 2026-08-31.
+

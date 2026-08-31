@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.ServiceCompat
+import com.hermes.node.engine.CloudflareTunnelManager
 import com.hermes.node.engine.LogStreamer
 import com.hermes.node.engine.LogStreamerInterface
 import com.hermes.node.engine.ProcessConfig
@@ -16,6 +17,7 @@ import com.hermes.node.engine.ProcessController
 import com.hermes.node.engine.ProcessControllerInterface
 import com.hermes.node.engine.ProcessState
 import com.hermes.node.engine.ProcessStopResult
+import com.hermes.node.engine.TunnelManagerInterface
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,10 +36,40 @@ open class HermesServerService : Service() {
     var wakeLockManager: WakeLockManagerInterface? = null
     var processController: ProcessControllerInterface? = null
     var logStreamer: LogStreamerInterface? = null
+    var tunnelManager: TunnelManagerInterface? = null
     internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
-    private var serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    internal var serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var processExitListener: ((Int) -> Unit)? = null
     private var processStateCollectorJob: Job? = null
+
+    internal fun ensureTunnelManager(): TunnelManagerInterface {
+        if (tunnelManager == null) {
+            tunnelManager = try {
+                CloudflareTunnelManager(filesDir = safeFilesDir, ioDispatcher = ioDispatcher)
+            } catch (_: Throwable) {
+                null
+            }
+        }
+        return tunnelManager ?: CloudflareTunnelManager(filesDir = safeFilesDir, ioDispatcher = ioDispatcher).also { tunnelManager = it }
+    }
+
+    internal fun stopTunnelBlocking() {
+        val mgr = tunnelManager ?: return
+        try {
+            // Avoid blocking the main thread (onDestroy etc) — fire-and-forget on serviceScope
+            serviceScope.launch(ioDispatcher) {
+                try { mgr.stop() } catch (_: Throwable) {}
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun stopTunnelBlockingSync(timeoutMs: Long = 1500L) {
+        val mgr = tunnelManager ?: return
+        try {
+            // Only for contexts where brief blocking is acceptable (e.g. background thread)
+            kotlinx.coroutines.runBlocking(ioDispatcher) { mgr.stop(timeoutMs) }
+        } catch (_: Throwable) {}
+    }
 
     private val safeFilesDir: File
         get() = try {
@@ -65,6 +97,8 @@ open class HermesServerService : Service() {
         if (logStreamer == null) {
             logStreamer = sharedLogStreamer
         }
+        // Ensure tunnel manager is initialized so stop paths are not no-ops
+        try { ensureTunnelManager() } catch (_: Throwable) {}
         setupProcessExitListener()
         NotificationHelper.createNotificationChannel(this)
     }
@@ -93,6 +127,9 @@ open class HermesServerService : Service() {
 
     internal open fun onProcessTerminatedUnexpectedly(exitCode: Int) {
         try {
+            stopTunnelBlocking()
+        } catch (_: Throwable) {}
+        try {
             if (wakeLockManager?.isHeld == true) {
                 wakeLockManager?.release()
             }
@@ -116,6 +153,7 @@ open class HermesServerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        try { ensureTunnelManager() } catch (_: Throwable) {}
         val action = getActionFromIntent(intent)
         when (action) {
             ACTION_STOP -> {
@@ -140,6 +178,9 @@ open class HermesServerService : Service() {
         processExitListener = null
         processStateCollectorJob?.cancel()
         processStateCollectorJob = null
+        try {
+            stopTunnelBlocking()
+        } catch (_: Throwable) {}
         try {
             logStreamer?.stop()
         } catch (ignored: Throwable) {}
@@ -269,6 +310,9 @@ open class HermesServerService : Service() {
     }
 
     fun stopForegroundServiceInternal(): ProcessStopResult {
+        try {
+            stopTunnelBlocking()
+        } catch (_: Throwable) {}
         val stopResult = processController?.let { controller ->
             runBlocking(ioDispatcher) {
                 controller.stop()
