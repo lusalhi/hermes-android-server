@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Forum
@@ -44,12 +46,15 @@ import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -68,6 +73,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -91,6 +97,7 @@ import com.hermes.node.ui.theme.HermesCyan
 import com.hermes.node.ui.theme.HermesCyanDark
 import com.hermes.node.ui.theme.StatusRunning
 import com.hermes.node.ui.theme.StatusStarting
+import com.hermes.node.viewmodel.ServerStatus
 import com.hermes.node.viewmodel.ServerUiState
 
 @Composable
@@ -121,6 +128,13 @@ fun SettingsScreen(
     onUpdateRestApiEnabled: (Boolean) -> Unit = {},
     onUpdateRestApiPort: (String) -> Unit = {},
     onToggleSkill: (String, Boolean) -> Unit = { _, _ -> },
+    onRefreshStorageUsage: () -> Unit = {},
+    onExportMemoryToDownloads: () -> Unit = {},
+    onShareMemoryBackup: () -> Unit = {},
+    onShowClearMemoryDialog: () -> Unit = {},
+    onDismissClearMemoryDialog: () -> Unit = {},
+    onConfirmClearMemory: () -> Unit = {},
+    onDismissMemoryActionMessage: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -134,6 +148,10 @@ fun SettingsScreen(
     var isWhatsAppSessionLinkVisible by rememberSaveable { mutableStateOf(false) }
     var isWhatsAppWebhookTokenVisible by rememberSaveable { mutableStateOf(false) }
     var isProviderDropdownOpen by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        onRefreshStorageUsage()
+    }
 
     val providers = listOf(
         "nous_portal" to "Nous Portal",
@@ -196,6 +214,48 @@ fun SettingsScreen(
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Dismiss message",
+                            tint = if (isSuccess) HermesCyan else MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
+
+        // Memory Action Feedback Banner
+        AnimatedVisibility(visible = state.memoryActionMessage != null) {
+            val isSuccess = state.isMemoryActionSuccess
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSuccess) HermesCyanDark.copy(alpha = 0.25f) else MaterialTheme.colorScheme.errorContainer
+                ),
+                shape = RoundedCornerShape(12.dp),
+                border = CardDefaults.outlinedCardBorder().copy(
+                    brush = androidx.compose.ui.graphics.SolidColor(if (isSuccess) HermesCyan else MaterialTheme.colorScheme.error)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (isSuccess) Icons.Default.CheckCircle else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = if (isSuccess) HermesCyan else MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = state.memoryActionMessage ?: "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isSuccess) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismissMemoryActionMessage) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Dismiss memory message",
                             tint = if (isSuccess) HermesCyan else MaterialTheme.colorScheme.error
                         )
                     }
@@ -514,6 +574,193 @@ fun SettingsScreen(
                                 )
                             )
                         }
+                    }
+                }
+            }
+        }
+
+        // Episodic Memory & Storage Section Header
+        Text(
+            text = "Episodic Memory & Storage",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+
+        // Episodic Memory & Storage Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder))
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Storage Usage Header Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    color = HermesCyan.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = HermesCyan.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(8.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Storage,
+                                contentDescription = "Storage",
+                                tint = HermesCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Episodic Memory",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = "SQLite checkpoints & conversation history",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        color = DarkBorder.copy(alpha = 0.5f),
+                        shape = CircleShape,
+                        modifier = Modifier.border(1.dp, DarkBorder, CircleShape)
+                    ) {
+                        Text(
+                            text = state.storageSizeFormatted,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = HermesCyan,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+
+                // Action Buttons: Export to Downloads & Share Backup
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = onExportMemoryToDownloads,
+                        enabled = !state.isExportingMemory && !state.isResettingMemory,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DarkBorder.copy(alpha = 0.6f),
+                            contentColor = MaterialTheme.colorScheme.onBackground
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        if (state.isExportingMemory) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = HermesCyan,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Exporting...",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = "Export Backup",
+                                tint = HermesCyan,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Export Backup",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onShareMemoryBackup,
+                        enabled = !state.isExportingMemory && !state.isResettingMemory,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Share Backup",
+                            tint = HermesCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Share Backup",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                // Clear Memory Button (Destructive action)
+                val isClearEnabled = state.storageSizeBytes > 0L && !state.isResettingMemory && !state.isExportingMemory
+                Button(
+                    onClick = onShowClearMemoryDialog,
+                    enabled = isClearEnabled,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.2f),
+                        contentColor = MaterialTheme.colorScheme.error,
+                        disabledContainerColor = DarkBorder.copy(alpha = 0.2f),
+                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (state.isResettingMemory) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = MaterialTheme.colorScheme.error,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Wiping Memory...",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.DeleteForever,
+                            contentDescription = "Clear Memory",
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Clear Memory",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
@@ -1405,6 +1652,65 @@ fun SettingsScreen(
                     fontWeight = FontWeight.Bold
                 )
             }
+        }
+
+        // Clear Memory Confirmation Dialog
+        if (state.showClearMemoryDialog) {
+            AlertDialog(
+                onDismissRequest = onDismissClearMemoryDialog,
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Warning",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(32.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        text = "Wipe Episodic Memory?",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                },
+                text = {
+                    val isRunning = state.status == ServerStatus.RUNNING
+                    val warningPrefix = if (isRunning) {
+                        "⚠️ Server is currently RUNNING. Active agent memory will be wiped and the running daemon will re-initialize a clean database state.\n\n"
+                    } else ""
+                    Text(
+                        text = "${warningPrefix}This will permanently delete all episodic SQLite conversation databases and agent checkpoints. This action cannot be undone.\n\nYour LLM provider API keys, gateway tokens, skill settings, and Linux environment will remain intact.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = onConfirmClearMemory,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = "Wipe Memory",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(
+                        onClick = onDismissClearMemoryDialog,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(text = "Cancel")
+                    }
+                },
+                containerColor = DarkSurface,
+                shape = RoundedCornerShape(16.dp)
+            )
         }
     }
 }

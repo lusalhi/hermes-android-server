@@ -11,6 +11,7 @@ import com.hermes.node.data.model.ProviderConfig
 import com.hermes.node.data.model.SkillsConfig
 import com.hermes.node.data.model.SystemConfig
 import com.hermes.node.engine.DeviceTelemetry
+import com.hermes.node.engine.MemoryManagerInterface
 import com.hermes.node.engine.TelemetryCollector
 import com.hermes.node.engine.TunnelManagerInterface
 import com.hermes.node.engine.TunnelState
@@ -2201,6 +2202,318 @@ class ServerViewModelTest {
 
         tempDir.deleteRecursively()
         vm.stopMonitoring()
+    }
+
+    @Test
+    fun init_withMemoryManager_refreshesStorageUsage() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(storageBytes = 4404019L, formattedSize = "4.2 MB")
+        val vm = ServerViewModel(
+            memoryManager = fakeMemory,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertEquals(4404019L, state.storageSizeBytes)
+        assertEquals("4.2 MB", state.storageSizeFormatted)
+        assertTrue(fakeMemory.calculateStorageCalls >= 1)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onExportMemoryToDownloads_success_updatesStateAndLogs() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(
+            storageBytes = 1048576L,
+            formattedSize = "1.0 MB",
+            exportResult = Result.success("Backup exported to Downloads/HermesNode/hermes-backup-test.zip")
+        )
+        val vm = ServerViewModel(
+            memoryManager = fakeMemory,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        testScheduler.advanceUntilIdle()
+
+        vm.onExportMemoryToDownloads()
+        assertTrue(vm.uiState.value.isExportingMemory)
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isExportingMemory)
+        assertTrue(state.isMemoryActionSuccess)
+        assertEquals("Backup exported to Downloads/HermesNode/hermes-backup-test.zip", state.memoryActionMessage)
+        assertTrue(state.logs.any { it.message.contains("hermes-backup-test.zip") })
+        assertEquals(1, fakeMemory.exportToDownloadsCalls)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onExportMemoryToDownloads_failure_updatesErrorStateAndLogs() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(
+            exportResult = Result.failure(java.io.IOException("Disk full error"))
+        )
+        val vm = ServerViewModel(
+            memoryManager = fakeMemory,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        testScheduler.advanceUntilIdle()
+
+        vm.onExportMemoryToDownloads()
+        assertTrue(vm.uiState.value.isExportingMemory)
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isExportingMemory)
+        assertFalse(state.isMemoryActionSuccess)
+        assertTrue(state.memoryActionMessage?.contains("Disk full error") == true)
+        assertTrue(state.logs.any { it.level == LogLevel.ERROR && it.message.contains("Disk full error") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onShareMemoryBackup_success_updatesStateAndLogs() = runTest(testDispatcher) {
+        val shareIntent = Intent(Intent.ACTION_SEND)
+        val fakeMemory = FakeMemoryManager(
+            shareResult = Result.success(shareIntent)
+        )
+        val vm = ServerViewModel(
+            memoryManager = fakeMemory,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        testScheduler.advanceUntilIdle()
+
+        var launchedIntent: Intent? = null
+        vm.onShareMemoryBackup { launchedIntent = it }
+
+        assertTrue(vm.uiState.value.isExportingMemory)
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isExportingMemory)
+        assertTrue(state.isMemoryActionSuccess)
+        assertEquals(shareIntent, launchedIntent)
+        assertEquals("Backup ready to share", state.memoryActionMessage)
+        assertTrue(state.logs.any { it.message.contains("share sheet launched") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onShareMemoryBackup_failure_updatesErrorStateAndLogs() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(
+            shareResult = Result.failure(java.io.IOException("Failed to create ZIP"))
+        )
+        val vm = ServerViewModel(
+            memoryManager = fakeMemory,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        testScheduler.advanceUntilIdle()
+
+        vm.onShareMemoryBackup()
+        assertTrue(vm.uiState.value.isExportingMemory)
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isExportingMemory)
+        assertFalse(state.isMemoryActionSuccess)
+        assertTrue(state.memoryActionMessage?.contains("Failed to create ZIP") == true)
+        assertTrue(state.logs.any { it.level == LogLevel.ERROR && it.message.contains("Failed to create ZIP") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onShareMemoryBackup_withoutLauncherOrContext_surfacesDescriptiveError() = runTest(testDispatcher) {
+        val shareIntent = Intent(Intent.ACTION_SEND)
+        val fakeMemory = FakeMemoryManager(shareResult = Result.success(shareIntent))
+        val vm = ServerViewModel(
+            context = null,
+            memoryManager = fakeMemory,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        testScheduler.advanceUntilIdle()
+
+        vm.onShareMemoryBackup(launcher = null)
+        assertTrue(vm.uiState.value.isExportingMemory)
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isExportingMemory)
+        assertFalse(state.isMemoryActionSuccess)
+        assertTrue(state.memoryActionMessage?.contains("No activity launcher or Context available") == true)
+        assertTrue(state.logs.any { it.level == LogLevel.ERROR && it.message.contains("No activity launcher or Context available") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onClearMemoryDialog_showAndDismiss_togglesDialogState() {
+        assertFalse(viewModel.uiState.value.showClearMemoryDialog)
+
+        viewModel.onShowClearMemoryDialog()
+        assertTrue(viewModel.uiState.value.showClearMemoryDialog)
+
+        viewModel.onDismissClearMemoryDialog()
+        assertFalse(viewModel.uiState.value.showClearMemoryDialog)
+    }
+
+    @Test
+    fun onConfirmClearMemory_success_wipesMemory_resetsSize_andLogs() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(
+            storageBytes = 8388608L,
+            formattedSize = "8.0 MB"
+        )
+        val vm = ServerViewModel(
+            memoryManager = fakeMemory,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        testScheduler.advanceUntilIdle()
+        assertEquals(8388608L, vm.uiState.value.storageSizeBytes)
+
+        vm.onShowClearMemoryDialog()
+        assertTrue(vm.uiState.value.showClearMemoryDialog)
+
+        vm.onConfirmClearMemory()
+        assertFalse(vm.uiState.value.showClearMemoryDialog)
+        assertTrue(vm.uiState.value.isResettingMemory)
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isResettingMemory)
+        assertTrue(state.isMemoryActionSuccess)
+        assertEquals(0L, state.storageSizeBytes)
+        assertEquals("0 B", state.storageSizeFormatted)
+        assertEquals("Episodic memory wiped successfully", state.memoryActionMessage)
+        assertTrue(state.logs.any { it.message.contains("Episodic memory wiped successfully") })
+        assertEquals(1, fakeMemory.clearEpisodicMemoryCalls)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onConfirmClearMemory_whileRunning_logsWarningAndWipesMemory() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(storageBytes = 1024L, formattedSize = "1.0 KB")
+        val vm = ServerViewModel(
+            memoryManager = fakeMemory,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        vm.onStartServer()
+        advanceTimeBy(650)
+        assertEquals(ServerStatus.RUNNING, vm.uiState.value.status)
+
+        vm.onConfirmClearMemory()
+        runCurrent()
+
+        val state = vm.uiState.value
+        assertTrue(state.logs.any { it.level == LogLevel.WARN && it.message.contains("Episodic memory cleared while server is running") })
+        assertEquals(0L, state.storageSizeBytes)
+        assertEquals(ServerStatus.RUNNING, state.status) // Daemon not killed
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onConfirmClearMemory_failure_surfacesErrorAndLogs() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(
+            storageBytes = 1024L,
+            clearResult = Result.failure(java.io.IOException("Permission denied"))
+        )
+        val vm = ServerViewModel(
+            memoryManager = fakeMemory,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        testScheduler.advanceUntilIdle()
+
+        vm.onConfirmClearMemory()
+        assertTrue(vm.uiState.value.isResettingMemory)
+
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isResettingMemory)
+        assertFalse(state.isMemoryActionSuccess)
+        assertTrue(state.memoryActionMessage?.contains("Permission denied") == true)
+        assertTrue(state.logs.any { it.level == LogLevel.ERROR && it.message.contains("Permission denied") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onDismissMemoryActionMessage_resetsMessage() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(exportResult = Result.success("Success"))
+        val vm = ServerViewModel(memoryManager = fakeMemory, defaultDispatcher = testDispatcher, ioDispatcher = testDispatcher)
+        vm.onExportMemoryToDownloads()
+        testScheduler.advanceUntilIdle()
+
+        assertNotNull(vm.uiState.value.memoryActionMessage)
+        vm.onDismissMemoryActionMessage()
+        assertNull(vm.uiState.value.memoryActionMessage)
+
+        vm.stopMonitoring()
+    }
+
+    private class FakeMemoryManager(
+        var storageBytes: Long = 0L,
+        var formattedSize: String = "0 B",
+        var exportResult: Result<String> = Result.success("Backup exported to Downloads/HermesNode/test.zip"),
+        var shareResult: Result<Intent> = Result.success(Intent(Intent.ACTION_SEND)),
+        var clearResult: Result<Boolean> = Result.success(true)
+    ) : MemoryManagerInterface {
+        var calculateStorageCalls = 0
+        var exportToDownloadsCalls = 0
+        var getShareIntentCalls = 0
+        var clearEpisodicMemoryCalls = 0
+
+        override fun calculateStorageUsage(): Long {
+            calculateStorageCalls++
+            return storageBytes
+        }
+
+        override fun formatStorageSize(bytes: Long): String {
+            return if (bytes == 0L) "0 B" else formattedSize
+        }
+
+        override fun exportMemoryBackup(destinationZipFile: File?): Result<File> {
+            val f = destinationZipFile ?: File.createTempFile("test_backup", ".zip")
+            return Result.success(f)
+        }
+
+        override fun exportToDownloads(): Result<String> {
+            exportToDownloadsCalls++
+            return exportResult
+        }
+
+        override fun getShareIntent(): Result<Intent> {
+            getShareIntentCalls++
+            return shareResult
+        }
+
+        override fun clearEpisodicMemory(): Result<Boolean> {
+            clearEpisodicMemoryCalls++
+            if (clearResult.isSuccess) {
+                storageBytes = 0L
+                formattedSize = "0 B"
+            }
+            return clearResult
+        }
     }
 
     private class FakeTunnelManager(

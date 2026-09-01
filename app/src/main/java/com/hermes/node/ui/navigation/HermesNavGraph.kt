@@ -35,6 +35,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.hermes.node.data.ConfigSerializer
 import com.hermes.node.data.EncryptedConfigRepository
 import com.hermes.node.engine.BootstrapExtractor
+import com.hermes.node.engine.MemoryManager
 import com.hermes.node.engine.SystemTelemetryCollector
 import com.hermes.node.service.HermesServerService
 
@@ -51,6 +52,7 @@ fun HermesApp(
                 val configRepository = EncryptedConfigRepository.create(appCtx)
                 val configSerializer = ConfigSerializer(appCtx.filesDir)
                 val telemetryCollector = SystemTelemetryCollector(appCtx)
+                val memoryManager = MemoryManager(appCtx)
                 return ServerViewModel(
                     context = appCtx,
                     bootstrapExtractor = extractor,
@@ -59,7 +61,8 @@ fun HermesApp(
                     serviceRunningFlow = HermesServerService.isRunning,
                     processStateFlow = HermesServerService.processState,
                     logStreamer = HermesServerService.sharedLogStreamer,
-                    telemetryCollector = telemetryCollector
+                    telemetryCollector = telemetryCollector,
+                    memoryManager = memoryManager
                 ) as T
             }
         }
@@ -159,7 +162,14 @@ fun HermesApp(
                     onDismissSaveMessage = viewModel::onDismissSaveMessage,
                     onRequestBatteryExemption = { viewModel.onRequestBatteryExemption(context) },
                     oemGuidanceUrl = viewModel.getDontKillMyAppUrl(),
-                    onToggleSkill = viewModel::onToggleSkill
+                    onToggleSkill = viewModel::onToggleSkill,
+                    onRefreshStorageUsage = viewModel::refreshStorageUsage,
+                    onExportMemoryToDownloads = viewModel::onExportMemoryToDownloads,
+                    onShareMemoryBackup = viewModel::onShareMemoryBackup,
+                    onShowClearMemoryDialog = viewModel::onShowClearMemoryDialog,
+                    onDismissClearMemoryDialog = viewModel::onDismissClearMemoryDialog,
+                    onConfirmClearMemory = viewModel::onConfirmClearMemory,
+                    onDismissMemoryActionMessage = viewModel::onDismissMemoryActionMessage
                 )
             }
         }

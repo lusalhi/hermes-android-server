@@ -18,6 +18,9 @@ import com.hermes.node.engine.BootstrapExtractor
 import com.hermes.node.engine.ExtractionResult
 import com.hermes.node.engine.HealthCheckResult
 import android.content.Context
+import android.content.Intent
+import com.hermes.node.engine.MemoryManager
+import com.hermes.node.engine.MemoryManagerInterface
 import com.hermes.node.service.BatteryOptimizationHelper
 import com.hermes.node.service.BatteryOptimizationHelperInterface
 import com.hermes.node.service.HermesServerService
@@ -43,6 +46,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class ServerViewModel(
     context: Context? = null,
@@ -60,7 +64,8 @@ class ServerViewModel(
     private val logStreamer: LogStreamerInterface? = null,
     private val telemetryCollector: TelemetryCollector? = null,
     private val telemetryMonitor: TelemetryMonitor? = null,
-    private val tunnelManager: TunnelManagerInterface? = null
+    private val tunnelManager: TunnelManagerInterface? = null,
+    private val memoryManager: MemoryManagerInterface? = null
 ) : ViewModel() {
 
     private val context: Context? = try {
@@ -86,6 +91,13 @@ class ServerViewModel(
             null
         }
     })
+    private val effectiveMemoryManager: MemoryManagerInterface? = memoryManager ?: (this.context?.let { ctx ->
+        try {
+            MemoryManager(ctx)
+        } catch (_: Throwable) {
+            null
+        }
+    })
 
     private var metricsJob: Job? = null
     private var telemetryJob: Job? = null
@@ -97,6 +109,7 @@ class ServerViewModel(
     private var logObserverJob: Job? = null
     private var tunnelObserverJob: Job? = null
     private var tunnelControlJob: Job? = null
+    private var memoryJob: Job? = null
     private val maxLogCapacity = 2000
 
     init {
@@ -110,6 +123,7 @@ class ServerViewModel(
         observeProcessState()
         observeTunnelState()
         startTelemetryPolling()
+        refreshStorageUsage()
     }
 
     fun performHealthCheck(): HealthCheckResult {
@@ -1214,6 +1228,8 @@ class ServerViewModel(
         bootstrapJob = null
         saveSettingsJob?.cancel()
         saveSettingsJob = null
+        memoryJob?.cancel()
+        memoryJob = null
         effectiveMonitor?.stop()
     }
 
@@ -1262,6 +1278,216 @@ class ServerViewModel(
                 _uiState.update { it.copy(logs = logsList) }
             }
         }
+    }
+
+    fun refreshStorageUsage() {
+        val manager = effectiveMemoryManager ?: return
+        viewModelScope.launch(ioDispatcher) {
+            val bytes = manager.calculateStorageUsage()
+            val formatted = manager.formatStorageSize(bytes)
+            _uiState.update {
+                it.copy(
+                    storageSizeBytes = bytes,
+                    storageSizeFormatted = formatted
+                )
+            }
+        }
+    }
+
+    fun onExportMemoryToDownloads() {
+        val manager = effectiveMemoryManager
+        if (manager == null) {
+            _uiState.update {
+                it.copy(
+                    isExportingMemory = false,
+                    isMemoryActionSuccess = false,
+                    memoryActionMessage = "Storage manager unavailable"
+                )
+            }
+            onAddLog("Memory export failed: Storage manager unavailable", LogLevel.ERROR)
+            return
+        }
+
+        memoryJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isExportingMemory = true,
+                memoryActionMessage = null
+            )
+        }
+        onAddLog("Starting episodic memory export to Downloads...", LogLevel.INFO)
+
+        memoryJob = viewModelScope.launch(ioDispatcher) {
+            try {
+                val result = manager.exportToDownloads()
+                if (result.isSuccess) {
+                    val message = result.getOrNull() ?: "Backup exported to Downloads successfully"
+                    _uiState.update {
+                        it.copy(
+                            isMemoryActionSuccess = true,
+                            memoryActionMessage = message
+                        )
+                    }
+                    onAddLog(message, LogLevel.INFO)
+                } else {
+                    val errorMsg = result.exceptionOrNull()?.message ?: "Export to Downloads failed"
+                    _uiState.update {
+                        it.copy(
+                            isMemoryActionSuccess = false,
+                            memoryActionMessage = "Export failed: $errorMsg"
+                        )
+                    }
+                    onAddLog("Export to Downloads error: $errorMsg", LogLevel.ERROR)
+                }
+                refreshStorageUsage()
+            } finally {
+                _uiState.update { it.copy(isExportingMemory = false) }
+            }
+        }
+    }
+
+    fun onShareMemoryBackup(launcher: ((Intent) -> Unit)? = null) {
+        val manager = effectiveMemoryManager
+        if (manager == null) {
+            _uiState.update {
+                it.copy(
+                    isExportingMemory = false,
+                    isMemoryActionSuccess = false,
+                    memoryActionMessage = "Storage manager unavailable"
+                )
+            }
+            onAddLog("Memory share failed: Storage manager unavailable", LogLevel.ERROR)
+            return
+        }
+
+        memoryJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isExportingMemory = true,
+                memoryActionMessage = null
+            )
+        }
+        onAddLog("Preparing episodic memory backup archive for sharing...", LogLevel.INFO)
+
+        memoryJob = viewModelScope.launch(ioDispatcher) {
+            try {
+                val result = manager.getShareIntent()
+                if (result.isSuccess) {
+                    val shareIntent = result.getOrThrow()
+                    try {
+                        withContext(Dispatchers.Main) {
+                            if (launcher != null) {
+                                launcher(shareIntent)
+                            } else if (context != null) {
+                                context.startActivity(shareIntent)
+                            } else {
+                                throw IllegalStateException("No activity launcher or Context available to display Share Sheet")
+                            }
+                        }
+                        _uiState.update {
+                            it.copy(
+                                isMemoryActionSuccess = true,
+                                memoryActionMessage = "Backup ready to share"
+                            )
+                        }
+                        onAddLog("Episodic memory backup prepared and share sheet launched.", LogLevel.INFO)
+                    } catch (e: Exception) {
+                        val errorMsg = e.message ?: "Failed to open share sheet"
+                        _uiState.update {
+                            it.copy(
+                                isMemoryActionSuccess = false,
+                                memoryActionMessage = "Share failed: $errorMsg"
+                            )
+                        }
+                        onAddLog("Failed to launch share sheet: $errorMsg", LogLevel.ERROR)
+                    }
+                } else {
+                    val errorMsg = result.exceptionOrNull()?.message ?: "Failed to prepare backup archive"
+                    _uiState.update {
+                        it.copy(
+                            isMemoryActionSuccess = false,
+                            memoryActionMessage = "Share failed: $errorMsg"
+                        )
+                    }
+                    onAddLog("Memory share error: $errorMsg", LogLevel.ERROR)
+                }
+            } finally {
+                _uiState.update { it.copy(isExportingMemory = false) }
+            }
+        }
+    }
+
+    fun onShowClearMemoryDialog() {
+        _uiState.update { it.copy(showClearMemoryDialog = true) }
+    }
+
+    fun onDismissClearMemoryDialog() {
+        _uiState.update { it.copy(showClearMemoryDialog = false) }
+    }
+
+    fun onConfirmClearMemory() {
+        _uiState.update {
+            it.copy(
+                showClearMemoryDialog = false,
+                isResettingMemory = true,
+                memoryActionMessage = null
+            )
+        }
+
+        if (_uiState.value.status == ServerStatus.RUNNING) {
+            onAddLog("Warning: Episodic memory cleared while server is running. Running daemon will restart memory state cleanly.", LogLevel.WARN)
+        }
+
+        val manager = effectiveMemoryManager
+        if (manager == null) {
+            _uiState.update {
+                it.copy(
+                    isResettingMemory = false,
+                    isMemoryActionSuccess = false,
+                    memoryActionMessage = "Storage manager unavailable"
+                )
+            }
+            onAddLog("Memory wipe failed: Storage manager unavailable", LogLevel.ERROR)
+            return
+        }
+
+        memoryJob?.cancel()
+        onAddLog("Starting factory reset of episodic memory...", LogLevel.INFO)
+
+        memoryJob = viewModelScope.launch(ioDispatcher) {
+            try {
+                val result = manager.clearEpisodicMemory()
+                if (result.isSuccess) {
+                    val bytes = manager.calculateStorageUsage()
+                    val formatted = manager.formatStorageSize(bytes)
+                    _uiState.update {
+                        it.copy(
+                            isMemoryActionSuccess = true,
+                            memoryActionMessage = "Episodic memory wiped successfully",
+                            storageSizeBytes = bytes,
+                            storageSizeFormatted = formatted
+                        )
+                    }
+                    onAddLog("Episodic memory wiped successfully. Configuration and userland preserved.", LogLevel.INFO)
+                } else {
+                    val errorMsg = result.exceptionOrNull()?.message ?: "Memory wipe failed"
+                    _uiState.update {
+                        it.copy(
+                            isMemoryActionSuccess = false,
+                            memoryActionMessage = "Wipe failed: $errorMsg"
+                        )
+                    }
+                    onAddLog("Episodic memory wipe error: $errorMsg", LogLevel.ERROR)
+                    refreshStorageUsage()
+                }
+            } finally {
+                _uiState.update { it.copy(isResettingMemory = false) }
+            }
+        }
+    }
+
+    fun onDismissMemoryActionMessage() {
+        _uiState.update { it.copy(memoryActionMessage = null) }
     }
 
     override fun onCleared() {

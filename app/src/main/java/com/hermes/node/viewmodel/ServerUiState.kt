@@ -72,6 +72,13 @@ data class ServerUiState(
     val isBatteryOptimizationIgnored: Boolean = false,
     val showBatteryOptimizationPrompt: Boolean = false,
     val skillsConfig: SkillsConfig = SkillsConfig(),
-    val installedSkills: List<SkillInfo> = SkillsConfig.DEFAULT_CORE_SKILLS
+    val installedSkills: List<SkillInfo> = SkillsConfig.DEFAULT_CORE_SKILLS,
+    val storageSizeBytes: Long = 0L,
+    val storageSizeFormatted: String = "0 B",
+    val isExportingMemory: Boolean = false,
+    val isResettingMemory: Boolean = false,
+    val memoryActionMessage: String? = null,
+    val isMemoryActionSuccess: Boolean = false,
+    val showClearMemoryDialog: Boolean = false
 )
 
