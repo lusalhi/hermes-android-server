@@ -263,9 +263,17 @@ data class ProcessConfig(
                         appendLine("  web_search: true")
                         appendLine("  search_provider: \"$safeProvider\"")
                         appendLine("  search_api_key: \"$safeKey\"")
-                        appendLine("web:")
+                        appendLine("search:")
                         appendLine("  provider: \"$safeProvider\"")
                         appendLine("  api_key: \"$safeKey\"")
+                        appendLine("  brave_api_key: \"$safeKey\"")
+                        appendLine("  tavily_api_key: \"$safeKey\"")
+                        appendLine("web:")
+                        appendLine("  backend: \"$safeProvider\"")
+                        appendLine("  search_backend: \"$safeProvider\"")
+                        appendLine("  provider: \"$safeProvider\"")
+                        appendLine("  api_key: \"$safeKey\"")
+                        appendLine("  brave_api_key: \"$safeKey\"")
                     } else {
                         appendLine("skills:")
                         appendLine("  web_search: ${config.skills.webSearch}")
@@ -280,6 +288,20 @@ data class ProcessConfig(
                     yamlTmp.delete()
                 }
                 ConfigSerializer.applyPosix0600Permissions(yamlFile)
+
+                // Mirror to usr/root/.hermes for PRoot fake-root (-0) environments
+                try {
+                    val rootDir = File(File(filesDir, BootstrapExtractor.USR_DIR_NAME), "root/.hermes")
+                    if (rootDir.parentFile?.exists() == true) {
+                        rootDir.mkdirs()
+                        val rootEnv = File(rootDir, ".env")
+                        val rootYaml = File(rootDir, "config.yaml")
+                        envFile.copyTo(rootEnv, overwrite = true)
+                        yamlFile.copyTo(rootYaml, overwrite = true)
+                        ConfigSerializer.applyPosix0600Permissions(rootEnv)
+                        ConfigSerializer.applyPosix0600Permissions(rootYaml)
+                    }
+                } catch (_: Throwable) {}
             } catch (e: Throwable) {
                 try {
                     Log.w("ProcessController", "Failed to synchronize .hermes config: ${e.message}")

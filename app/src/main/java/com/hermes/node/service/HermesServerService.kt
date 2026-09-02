@@ -295,6 +295,10 @@ open class HermesServerService : Service() {
             val targetConfig = config ?: ProcessConfig.createHermesDaemonConfig(safeFilesDir)
             try {
                 logStreamer?.append("Launching Hermes daemon: ${targetConfig.fullCommand.joinToString(" ")}", com.hermes.node.viewmodel.LogLevel.INFO)
+                if (targetConfig.environment.containsKey("HERMES_SEARCH_PROVIDER")) {
+                    val prov = targetConfig.environment["HERMES_SEARCH_PROVIDER"]
+                    logStreamer?.append("Web search skill active with provider: $prov", com.hermes.node.viewmodel.LogLevel.INFO)
+                }
             } catch (_: Throwable) {}
             val startResult = runBlocking(ioDispatcher) {
                 controller.start(targetConfig)
