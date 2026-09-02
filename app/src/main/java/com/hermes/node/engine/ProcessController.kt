@@ -2,6 +2,9 @@ package com.hermes.node.engine
 
 import android.content.Context
 import android.util.Log
+import com.hermes.node.data.ConfigSerializer
+import com.hermes.node.data.model.HermesConfig
+import com.hermes.node.data.model.SkillsConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -61,7 +64,8 @@ data class ProcessConfig(
          */
         fun createHermesDaemonConfig(
             filesDir: File,
-            customEnv: Map<String, String> = emptyMap()
+            customEnv: Map<String, String> = emptyMap(),
+            hermesConfig: HermesConfig? = null
         ): ProcessConfig {
             val usrDir = File(filesDir, BootstrapExtractor.USR_DIR_NAME)
             val prootBin = File(usrDir, "bin/proot").absolutePath
@@ -69,6 +73,15 @@ data class ProcessConfig(
             val pythonBin = File(usrDir, "bin/python3").absolutePath
             val configFile = File(filesDir, DAEMON_CONFIG_FILENAME).absolutePath
             val tmpDir = File(filesDir, "tmp").apply { if (!exists()) mkdirs() }
+
+            val effectiveConfig = hermesConfig ?: run {
+                val cFile = File(configFile)
+                if (cFile.exists()) {
+                    ConfigSerializer(cFile).deserialize().getOrNull() ?: HermesConfig()
+                } else {
+                    HermesConfig()
+                }
+            }
 
             val env = mutableMapOf(
                 "HOME" to filesDir.absolutePath,
@@ -79,7 +92,32 @@ data class ProcessConfig(
                 "PYTHONPATH" to "${usrDir.absolutePath}/lib/python3.11/site-packages",
                 "HERMES_CONFIG_PATH" to configFile
             )
+
+            val trimmedSearchKey = effectiveConfig.skills.searchApiKey.trim()
+            val rawSearchProvider = effectiveConfig.skills.searchProvider.lowercase().trim()
+            val searchProvider = if (rawSearchProvider in SkillsConfig.SUPPORTED_SEARCH_PROVIDERS) {
+                rawSearchProvider
+            } else {
+                SkillsConfig.SEARCH_PROVIDER_BRAVE
+            }
+
+            val isSearchActive = effectiveConfig.skills.webSearch && trimmedSearchKey.isNotBlank()
+            if (isSearchActive) {
+                when (searchProvider) {
+                    "brave" -> {
+                        env["BRAVE_SEARCH_API_KEY"] = trimmedSearchKey
+                        env["BRAVE_API_KEY"] = trimmedSearchKey
+                    }
+                    "tavily" -> env["TAVILY_API_KEY"] = trimmedSearchKey
+                    "firecrawl" -> env["FIRECRAWL_API_KEY"] = trimmedSearchKey
+                    "exa" -> env["EXA_API_KEY"] = trimmedSearchKey
+                }
+                env["HERMES_SEARCH_PROVIDER"] = searchProvider
+            }
+
             env.putAll(customEnv)
+
+            syncHermesConfig(filesDir, effectiveConfig)
 
             val useProot = File(prootBin).exists() && File(prootBin).canExecute()
             val executable = if (useProot) prootBin else if (File(hermesBin).exists()) hermesBin else pythonBin
@@ -107,6 +145,146 @@ data class ProcessConfig(
                 environment = env,
                 redirectErrorStream = false
             )
+        }
+
+        /**
+         * Synchronizes search provider configuration to ${filesDir}/.hermes/config.yaml
+         * and ${filesDir}/.hermes/.env with strict POSIX 0600 permissions.
+         */
+        fun syncHermesConfig(filesDir: File, config: HermesConfig) {
+            try {
+                val hermesDir = File(filesDir, ".hermes")
+                if (!hermesDir.exists()) {
+                    hermesDir.mkdirs()
+                }
+
+                val trimmedKey = config.skills.searchApiKey.trim()
+                val rawProvider = config.skills.searchProvider.lowercase().trim()
+                val provider = if (rawProvider in SkillsConfig.SUPPORTED_SEARCH_PROVIDERS) {
+                    rawProvider
+                } else {
+                    SkillsConfig.SEARCH_PROVIDER_BRAVE
+                }
+
+                // Sanitize values (strip CRLF, escape double quotes)
+                val safeKey = trimmedKey.replace("\r", "").replace("\n", "").replace("\"", "\\\"")
+                val safeProvider = provider.replace("\r", "").replace("\n", "").replace("\"", "\\\"")
+                val isSearchActive = config.skills.webSearch && safeKey.isNotBlank()
+
+                // 1. Sync .env (preserve all non-search variables)
+                val envFile = File(hermesDir, ".env")
+                val existingEnvLines = if (envFile.exists()) {
+                    try {
+                        envFile.readLines(Charsets.UTF_8).filter { line ->
+                            val trimmed = line.trim()
+                            !trimmed.startsWith("HERMES_SEARCH_PROVIDER=") &&
+                            !trimmed.startsWith("BRAVE_SEARCH_API_KEY=") &&
+                            !trimmed.startsWith("BRAVE_API_KEY=") &&
+                            !trimmed.startsWith("TAVILY_API_KEY=") &&
+                            !trimmed.startsWith("FIRECRAWL_API_KEY=") &&
+                            !trimmed.startsWith("EXA_API_KEY=")
+                        }
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                } else {
+                    emptyList()
+                }
+
+                val updatedEnvLines = existingEnvLines.toMutableList()
+                if (isSearchActive) {
+                    updatedEnvLines.add("HERMES_SEARCH_PROVIDER=$safeProvider")
+                    when (safeProvider) {
+                        "brave" -> {
+                            updatedEnvLines.add("BRAVE_SEARCH_API_KEY=$safeKey")
+                            updatedEnvLines.add("BRAVE_API_KEY=$safeKey")
+                        }
+                        "tavily" -> updatedEnvLines.add("TAVILY_API_KEY=$safeKey")
+                        "firecrawl" -> updatedEnvLines.add("FIRECRAWL_API_KEY=$safeKey")
+                        "exa" -> updatedEnvLines.add("EXA_API_KEY=$safeKey")
+                    }
+                }
+
+                val envTmp = File(hermesDir, ".env.tmp")
+                envTmp.writeText(updatedEnvLines.joinToString("\n") + if (updatedEnvLines.isNotEmpty()) "\n" else "", Charsets.UTF_8)
+                ConfigSerializer.applyPosix0600Permissions(envTmp)
+                if (!envTmp.renameTo(envFile)) {
+                    envTmp.copyTo(envFile, overwrite = true)
+                    envTmp.delete()
+                }
+                ConfigSerializer.applyPosix0600Permissions(envFile)
+
+                // 2. Sync config.yaml (preserve all non-search lines and sections)
+                val yamlFile = File(hermesDir, "config.yaml")
+                val searchKeys = setOf("search_provider:", "search_api_key:", "web_search:")
+                val existingYamlLines = if (yamlFile.exists()) {
+                    try {
+                        val lines = yamlFile.readLines(Charsets.UTF_8)
+                        val filtered = mutableListOf<String>()
+                        var skippingWebBlock = false
+                        for (line in lines) {
+                            val trimmed = line.trim()
+                            if (trimmed == "web:" || trimmed.startsWith("web:")) {
+                                skippingWebBlock = true
+                                continue
+                            }
+                            if (skippingWebBlock) {
+                                if (line.startsWith(" ") || line.startsWith("\t")) {
+                                    continue
+                                } else {
+                                    skippingWebBlock = false
+                                }
+                            }
+                            if (searchKeys.any { trimmed.startsWith(it) }) {
+                                continue
+                            }
+                            filtered.add(line)
+                        }
+                        while (filtered.isNotEmpty() && filtered.last().isBlank()) {
+                            filtered.removeAt(filtered.size - 1)
+                        }
+                        filtered
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                } else {
+                    emptyList()
+                }
+
+                val yamlContent = buildString {
+                    if (existingYamlLines.isNotEmpty()) {
+                        append(existingYamlLines.joinToString("\n"))
+                        append("\n")
+                    }
+                    if (isSearchActive) {
+                        appendLine("search_provider: \"$safeProvider\"")
+                        appendLine("search_api_key: \"$safeKey\"")
+                        appendLine("skills:")
+                        appendLine("  web_search: true")
+                        appendLine("  search_provider: \"$safeProvider\"")
+                        appendLine("  search_api_key: \"$safeKey\"")
+                        appendLine("web:")
+                        appendLine("  provider: \"$safeProvider\"")
+                        appendLine("  api_key: \"$safeKey\"")
+                    } else {
+                        appendLine("skills:")
+                        appendLine("  web_search: ${config.skills.webSearch}")
+                    }
+                }
+
+                val yamlTmp = File(hermesDir, "config.yaml.tmp")
+                yamlTmp.writeText(yamlContent, Charsets.UTF_8)
+                ConfigSerializer.applyPosix0600Permissions(yamlTmp)
+                if (!yamlTmp.renameTo(yamlFile)) {
+                    yamlTmp.copyTo(yamlFile, overwrite = true)
+                    yamlTmp.delete()
+                }
+                ConfigSerializer.applyPosix0600Permissions(yamlFile)
+            } catch (e: Throwable) {
+                try {
+                    Log.w("ProcessController", "Failed to synchronize .hermes config: ${e.message}")
+                } catch (_: Throwable) {}
+            }
         }
     }
 }

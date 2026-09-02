@@ -79,6 +79,7 @@ data class ServerUiState(
     val isResettingMemory: Boolean = false,
     val memoryActionMessage: String? = null,
     val isMemoryActionSuccess: Boolean = false,
-    val showClearMemoryDialog: Boolean = false
+    val showClearMemoryDialog: Boolean = false,
+    val searchApiKeyVisible: Boolean = false
 )
 

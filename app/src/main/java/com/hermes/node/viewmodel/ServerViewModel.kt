@@ -589,6 +589,7 @@ class ServerViewModel(
                 )
             }
             val hasCredentials = config.provider.apiKey.isNotBlank() ||
+                config.skills.searchApiKey.isNotBlank() ||
                 config.gateway.telegram.botToken.isNotBlank() ||
                 config.gateway.discord.botToken.isNotBlank() ||
                 config.gateway.slack.appToken.isNotBlank() ||
@@ -621,6 +622,19 @@ class ServerViewModel(
         val trimmedPortStr = state.restApiPort.trim()
         val parsedPort = trimmedPortStr.toIntOrNull() ?: 8000
         val finalPort = if (parsedPort in 1..65535) parsedPort else 8000
+
+        val baseSkills = skillsOverride ?: state.skillsConfig
+        val trimmedSearchApiKey = baseSkills.searchApiKey.trim()
+        val rawSearchProvider = baseSkills.searchProvider.trim().lowercase()
+        val trimmedSearchProvider = if (rawSearchProvider in SkillsConfig.SUPPORTED_SEARCH_PROVIDERS) {
+            rawSearchProvider
+        } else {
+            SkillsConfig.SEARCH_PROVIDER_BRAVE
+        }
+        val finalSkills = baseSkills.copy(
+            searchProvider = trimmedSearchProvider,
+            searchApiKey = trimmedSearchApiKey
+        )
 
         return HermesConfig(
             provider = ProviderConfig(
@@ -659,7 +673,7 @@ class ServerViewModel(
                 autoStartOnBoot = state.isAutoStartEnabled,
                 publicTunnelEnabled = state.isPublicTunnelEnabled
             ),
-            skills = skillsOverride ?: state.skillsConfig
+            skills = finalSkills
         )
     }
 
@@ -691,7 +705,9 @@ class ServerViewModel(
                         slackBotToken = config.gateway.slack.botToken,
                         whatsAppSessionLink = config.gateway.whatsapp.sessionLink,
                         whatsAppWebhookToken = config.gateway.whatsapp.webhookToken,
-                        restApiPort = config.gateway.restApi.port.toString()
+                        restApiPort = config.gateway.restApi.port.toString(),
+                        skillsConfig = config.skills,
+                        installedSkills = config.skills.toInstalledSkills()
                     )
                 }
 
@@ -819,6 +835,36 @@ class ServerViewModel(
 
     fun onUpdateProvider(provider: String) {
         _uiState.update { it.copy(selectedProvider = provider, isSettingsSaved = false, configSaveMessage = null) }
+    }
+
+    fun onUpdateSearchProvider(provider: String) {
+        val normalized = provider.trim().lowercase()
+        val validated = if (normalized in SkillsConfig.SUPPORTED_SEARCH_PROVIDERS) normalized else SkillsConfig.SEARCH_PROVIDER_BRAVE
+        _uiState.update { current ->
+            val updatedSkills = current.skillsConfig.copy(searchProvider = validated)
+            current.copy(
+                skillsConfig = updatedSkills,
+                installedSkills = updatedSkills.toInstalledSkills(),
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+    }
+
+    fun onUpdateSearchApiKey(apiKey: String) {
+        _uiState.update { current ->
+            val updatedSkills = current.skillsConfig.copy(searchApiKey = apiKey)
+            current.copy(
+                skillsConfig = updatedSkills,
+                installedSkills = updatedSkills.toInstalledSkills(),
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+    }
+
+    fun onToggleSearchApiKeyVisibility() {
+        _uiState.update { it.copy(searchApiKeyVisible = !it.searchApiKeyVisible) }
     }
 
     fun onUpdateApiKey(apiKey: String) {

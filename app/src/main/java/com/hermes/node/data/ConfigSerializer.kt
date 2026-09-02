@@ -103,11 +103,13 @@ open class ConfigSerializer(
 
         val skillsObj = JSONObject()
         skillsObj.put(SkillsConfig.SKILL_WEB_SEARCH, config.skills.webSearch)
+        skillsObj.put("search_provider", config.skills.searchProvider)
+        skillsObj.put("search_api_key", config.skills.searchApiKey)
         skillsObj.put(SkillsConfig.SKILL_FILE_MANAGER, config.skills.fileManager)
         skillsObj.put(SkillsConfig.SKILL_BASH_RUNNER, config.skills.bashRunner)
         skillsObj.put(SkillsConfig.SKILL_CRON_SCHEDULER, config.skills.cronScheduler)
         for ((customId, customEnabled) in config.skills.customSkills) {
-            if (customId !in SkillsConfig.CORE_SKILL_IDS) {
+            if (customId !in SkillsConfig.CORE_SKILL_IDS && customId !in SkillsConfig.NON_SKILL_KEYS) {
                 skillsObj.put(customId, customEnabled)
             }
         }
@@ -187,7 +189,7 @@ open class ConfigSerializer(
                 val keys = sObj.keys()
                 while (keys.hasNext()) {
                     val key = keys.next()
-                    if (key !in SkillsConfig.CORE_SKILL_IDS) {
+                    if (key !in SkillsConfig.CORE_SKILL_IDS && key !in SkillsConfig.NON_SKILL_KEYS) {
                         val rawVal = sObj.opt(key)
                         if (rawVal is Boolean) {
                             customMap[key] = rawVal
@@ -196,8 +198,13 @@ open class ConfigSerializer(
                         }
                     }
                 }
+                val rawProvider = sObj.optString("search_provider", SkillsConfig.SEARCH_PROVIDER_BRAVE)
+                val searchProvider = if (rawProvider.isNotBlank()) rawProvider else SkillsConfig.SEARCH_PROVIDER_BRAVE
+                val searchApiKey = sObj.optString("search_api_key", "")
                 SkillsConfig(
                     webSearch = sObj.optBoolean(SkillsConfig.SKILL_WEB_SEARCH, true),
+                    searchProvider = searchProvider,
+                    searchApiKey = searchApiKey,
                     fileManager = sObj.optBoolean(SkillsConfig.SKILL_FILE_MANAGER, true),
                     bashRunner = sObj.optBoolean(SkillsConfig.SKILL_BASH_RUNNER, true),
                     cronScheduler = sObj.optBoolean(SkillsConfig.SKILL_CRON_SCHEDULER, true),

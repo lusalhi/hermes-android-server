@@ -70,6 +70,12 @@ interface ConfigRepository {
     fun saveSkillsConfig(skills: SkillsConfig)
     fun isSkillEnabled(skillId: String): Boolean
     fun saveSkillEnabled(skillId: String, enabled: Boolean)
+
+    fun getSearchProvider(): String
+    fun saveSearchProvider(provider: String)
+    fun getSearchApiKey(): String
+    fun saveSearchApiKey(apiKey: String)
+    fun saveSearchConfig(provider: String, apiKey: String)
 }
 
 class EncryptedConfigRepository(
@@ -107,6 +113,8 @@ class EncryptedConfigRepository(
         const val KEY_PUBLIC_TUNNEL = "key_public_tunnel"
 
         const val KEY_SKILL_WEB_SEARCH = "key_skill_web_search"
+        const val KEY_SEARCH_PROVIDER = "key_search_provider"
+        const val KEY_SEARCH_API_KEY = "key_search_api_key"
         const val KEY_SKILL_FILE_MANAGER = "key_skill_file_manager"
         const val KEY_SKILL_BASH_RUNNER = "key_skill_bash_runner"
         const val KEY_SKILL_CRON_SCHEDULER = "key_skill_cron_scheduler"
@@ -153,6 +161,8 @@ class EncryptedConfigRepository(
             .putBoolean(KEY_AUTO_START, config.system.autoStartOnBoot)
             .putBoolean(KEY_PUBLIC_TUNNEL, config.system.publicTunnelEnabled)
             .putBoolean(KEY_SKILL_WEB_SEARCH, config.skills.webSearch)
+            .putString(KEY_SEARCH_PROVIDER, config.skills.searchProvider)
+            .putString(KEY_SEARCH_API_KEY, config.skills.searchApiKey)
             .putBoolean(KEY_SKILL_FILE_MANAGER, config.skills.fileManager)
             .putBoolean(KEY_SKILL_BASH_RUNNER, config.skills.bashRunner)
             .putBoolean(KEY_SKILL_CRON_SCHEDULER, config.skills.cronScheduler)
@@ -341,8 +351,13 @@ class EncryptedConfigRepository(
                 customMap[skillId] = value
             }
         }
+        val searchProvider = prefs.getString(KEY_SEARCH_PROVIDER, SkillsConfig.SEARCH_PROVIDER_BRAVE)
+            ?.ifBlank { SkillsConfig.SEARCH_PROVIDER_BRAVE } ?: SkillsConfig.SEARCH_PROVIDER_BRAVE
+        val searchApiKey = prefs.getString(KEY_SEARCH_API_KEY, "") ?: ""
         return SkillsConfig(
             webSearch = prefs.getBoolean(KEY_SKILL_WEB_SEARCH, true),
+            searchProvider = searchProvider,
+            searchApiKey = searchApiKey,
             fileManager = prefs.getBoolean(KEY_SKILL_FILE_MANAGER, true),
             bashRunner = prefs.getBoolean(KEY_SKILL_BASH_RUNNER, true),
             cronScheduler = prefs.getBoolean(KEY_SKILL_CRON_SCHEDULER, true),
@@ -353,6 +368,8 @@ class EncryptedConfigRepository(
     override fun saveSkillsConfig(skills: SkillsConfig) {
         val editor = prefs.edit()
             .putBoolean(KEY_SKILL_WEB_SEARCH, skills.webSearch)
+            .putString(KEY_SEARCH_PROVIDER, skills.searchProvider)
+            .putString(KEY_SEARCH_API_KEY, skills.searchApiKey)
             .putBoolean(KEY_SKILL_FILE_MANAGER, skills.fileManager)
             .putBoolean(KEY_SKILL_BASH_RUNNER, skills.bashRunner)
             .putBoolean(KEY_SKILL_CRON_SCHEDULER, skills.cronScheduler)
@@ -386,6 +403,28 @@ class EncryptedConfigRepository(
             else -> editor.putBoolean("$KEY_CUSTOM_SKILL_PREFIX$skillId", enabled)
         }
         editor.apply()
+    }
+
+    override fun getSearchProvider(): String =
+        prefs.getString(KEY_SEARCH_PROVIDER, SkillsConfig.SEARCH_PROVIDER_BRAVE)
+            ?.ifBlank { SkillsConfig.SEARCH_PROVIDER_BRAVE } ?: SkillsConfig.SEARCH_PROVIDER_BRAVE
+
+    override fun saveSearchProvider(provider: String) {
+        prefs.edit().putString(KEY_SEARCH_PROVIDER, provider).apply()
+    }
+
+    override fun getSearchApiKey(): String =
+        prefs.getString(KEY_SEARCH_API_KEY, "") ?: ""
+
+    override fun saveSearchApiKey(apiKey: String) {
+        prefs.edit().putString(KEY_SEARCH_API_KEY, apiKey).apply()
+    }
+
+    override fun saveSearchConfig(provider: String, apiKey: String) {
+        prefs.edit()
+            .putString(KEY_SEARCH_PROVIDER, provider)
+            .putString(KEY_SEARCH_API_KEY, apiKey)
+            .apply()
     }
 }
 

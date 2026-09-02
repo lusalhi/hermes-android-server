@@ -135,6 +135,9 @@ fun SettingsScreen(
     onUpdateRestApiEnabled: (Boolean) -> Unit = {},
     onUpdateRestApiPort: (String) -> Unit = {},
     onToggleSkill: (String, Boolean) -> Unit = { _, _ -> },
+    onUpdateSearchProvider: (String) -> Unit = {},
+    onUpdateSearchApiKey: (String) -> Unit = {},
+    onToggleSearchApiKeyVisibility: () -> Unit = {},
     onRefreshStorageUsage: () -> Unit = {},
     onExportMemoryToDownloads: () -> Unit = {},
     onShareMemoryBackup: () -> Unit = {},
@@ -148,6 +151,8 @@ fun SettingsScreen(
     val context = LocalContext.current
 
     var isApiKeyVisible by rememberSaveable { mutableStateOf(false) }
+    var isSearchApiKeyVisible by rememberSaveable { mutableStateOf(false) }
+    var isSearchProviderDropdownOpen by rememberSaveable { mutableStateOf(false) }
     var isTelegramTokenVisible by rememberSaveable { mutableStateOf(false) }
     var isDiscordTokenVisible by rememberSaveable { mutableStateOf(false) }
     var isSlackAppTokenVisible by rememberSaveable { mutableStateOf(false) }
@@ -502,84 +507,226 @@ fun SettingsScreen(
                             else -> Icons.Default.Extension
                         }
 
-                        Row(
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .background(
-                                            color = if (skill.enabled) HermesCyan.copy(alpha = 0.15f) else DarkBorder.copy(alpha = 0.3f),
-                                            shape = RoundedCornerShape(8.dp)
-                                        )
-                                        .border(
-                                            width = 1.dp,
-                                            color = if (skill.enabled) HermesCyan.copy(alpha = 0.5f) else DarkBorder,
-                                            shape = RoundedCornerShape(8.dp)
-                                        ),
-                                    contentAlignment = Alignment.Center
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = icon,
-                                        contentDescription = skill.name,
-                                        tint = if (skill.enabled) HermesCyan else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .background(
+                                                color = if (skill.enabled) HermesCyan.copy(alpha = 0.15f) else DarkBorder.copy(alpha = 0.3f),
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .border(
+                                                width = 1.dp,
+                                                color = if (skill.enabled) HermesCyan.copy(alpha = 0.5f) else DarkBorder,
+                                                shape = RoundedCornerShape(8.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
                                     ) {
-                                        Text(
-                                            text = skill.name,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onBackground
+                                        Icon(
+                                            imageVector = icon,
+                                            contentDescription = skill.name,
+                                            tint = if (skill.enabled) HermesCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(22.dp)
                                         )
-                                        if (skill.isCore) {
-                                            Surface(
-                                                color = DarkBorder.copy(alpha = 0.5f),
-                                                shape = RoundedCornerShape(4.dp)
-                                            ) {
-                                                Text(
-                                                    text = "CORE",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = HermesCyan,
-                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = skill.name,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onBackground
+                                            )
+                                            if (skill.isCore) {
+                                                Surface(
+                                                    color = DarkBorder.copy(alpha = 0.5f),
+                                                    shape = RoundedCornerShape(4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "CORE",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = HermesCyan,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
                                             }
                                         }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = skill.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = skill.description,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Switch(
+                                    checked = skill.enabled,
+                                    onCheckedChange = { enabled ->
+                                        onToggleSkill(skill.id, enabled)
+                                    },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "Toggle ${skill.name} capability"
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color.White,
+                                        checkedTrackColor = HermesCyan
                                     )
+                                )
+                            }
+
+                            if (skill.id == SkillsConfig.SKILL_WEB_SEARCH) {
+                                AnimatedVisibility(visible = skill.enabled) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 52.dp, top = 4.dp, bottom = 8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        val searchProviders = listOf(
+                                            SkillsConfig.SEARCH_PROVIDER_BRAVE to "Brave Search (Default)",
+                                            SkillsConfig.SEARCH_PROVIDER_TAVILY to "Tavily",
+                                            SkillsConfig.SEARCH_PROVIDER_FIRECRAWL to "Firecrawl",
+                                            SkillsConfig.SEARCH_PROVIDER_EXA to "Exa"
+                                        )
+                                        val activeProvider = state.skillsConfig.searchProvider.lowercase().trim().ifBlank { SkillsConfig.SEARCH_PROVIDER_BRAVE }
+                                        val currentSearchLabel = searchProviders.firstOrNull { it.first == activeProvider }?.second
+                                            ?: SkillsConfig.formatSearchProviderLabel(activeProvider)
+
+                                        // Provider Selector Dropdown
+                                        Column {
+                                            Text(
+                                                text = "Search Provider",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            OutlinedButton(
+                                                onClick = { isSearchProviderDropdownOpen = true },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(12.dp),
+                                                colors = ButtonDefaults.outlinedButtonColors(
+                                                    contentColor = MaterialTheme.colorScheme.onBackground
+                                                )
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(text = currentSearchLabel)
+                                                    Icon(
+                                                        imageVector = Icons.Default.ArrowDropDown,
+                                                        contentDescription = "Select Search Provider"
+                                                    )
+                                                }
+                                            }
+
+                                            DropdownMenu(
+                                                expanded = isSearchProviderDropdownOpen,
+                                                onDismissRequest = { isSearchProviderDropdownOpen = false }
+                                            ) {
+                                                searchProviders.forEach { (key, label) ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(label) },
+                                                        onClick = {
+                                                            onUpdateSearchProvider(key)
+                                                            isSearchProviderDropdownOpen = false
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        // Search API Key Field
+                                        Column {
+                                            Text(
+                                                text = "Search API Key",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            OutlinedTextField(
+                                                value = state.skillsConfig.searchApiKey,
+                                                onValueChange = onUpdateSearchApiKey,
+                                                placeholder = { Text("Enter ${SkillsConfig.formatSearchProviderLabel(activeProvider)} API Key") },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Key,
+                                                        contentDescription = null,
+                                                        tint = HermesCyan
+                                                    )
+                                                },
+                                                trailingIcon = {
+                                                    IconButton(onClick = {
+                                                        isSearchApiKeyVisible = !isSearchApiKeyVisible
+                                                        onToggleSearchApiKeyVisibility()
+                                                    }) {
+                                                        Icon(
+                                                            imageVector = if (isSearchApiKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                                            contentDescription = if (isSearchApiKeyVisible) "Hide Search Key" else "Show Search Key",
+                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                },
+                                                visualTransformation = if (isSearchApiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                                singleLine = true,
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(12.dp),
+                                                colors = OutlinedTextFieldDefaults.colors(
+                                                    focusedContainerColor = DarkSurface,
+                                                    unfocusedContainerColor = DarkSurface,
+                                                    focusedBorderColor = HermesCyan,
+                                                    unfocusedBorderColor = DarkBorder
+                                                )
+                                            )
+                                        }
+
+                                        // Helper info warning
+                                        if (state.skillsConfig.searchApiKey.isBlank()) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Warning,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Text(
+                                                    text = "An API key is required to perform live web searches. Without a key, web search queries will be skipped.",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.error
+                                                )
+                                            }
+                                        } else {
+                                            Text(
+                                                text = "Key is encrypted with Keystore and exported to daemon environment.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
                                 }
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Switch(
-                                checked = skill.enabled,
-                                onCheckedChange = { enabled ->
-                                    onToggleSkill(skill.id, enabled)
-                                },
-                                modifier = Modifier.semantics {
-                                    contentDescription = "Toggle ${skill.name} capability"
-                                },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = HermesCyan
-                                )
-                            )
                         }
                     }
                 }

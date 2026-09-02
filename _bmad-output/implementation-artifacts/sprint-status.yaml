@@ -66,6 +66,7 @@ development_status:
   epic-6: in-progress
   6-1-skill-manifest-viewer-tool-enablement-toggles: done
   6-2-episodic-memory-inspector-database-backup-factory-reset: done
+  6-3-search-api-key-configuration-for-web-search: review
   epic-6-retrospective: optional
 action_items:
   - id: "epic-2-retro-item-1-in-epic-3-decouple-sub-process-lifecycle"

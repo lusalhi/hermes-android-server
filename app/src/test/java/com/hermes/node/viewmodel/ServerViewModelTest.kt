@@ -2205,6 +2205,174 @@ class ServerViewModelTest {
     }
 
     @Test
+    fun onUpdateSearchProvider_updatesUiState() = runTest(testDispatcher) {
+        val vm = ServerViewModel(
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertEquals("brave", vm.uiState.value.skillsConfig.searchProvider)
+
+        vm.onUpdateSearchProvider("tavily")
+
+        assertEquals("tavily", vm.uiState.value.skillsConfig.searchProvider)
+        assertFalse(vm.uiState.value.isSettingsSaved)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onUpdateSearchApiKey_updatesUiState() = runTest(testDispatcher) {
+        val vm = ServerViewModel(
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertEquals("", vm.uiState.value.skillsConfig.searchApiKey)
+
+        vm.onUpdateSearchApiKey("tvly-new-key-123")
+
+        assertEquals("tvly-new-key-123", vm.uiState.value.skillsConfig.searchApiKey)
+        assertFalse(vm.uiState.value.isSettingsSaved)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onToggleSearchApiKeyVisibility_togglesUiState() = runTest(testDispatcher) {
+        val vm = ServerViewModel(
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertFalse(vm.uiState.value.searchApiKeyVisible)
+
+        vm.onToggleSearchApiKeyVisibility()
+        assertTrue(vm.uiState.value.searchApiKeyVisible)
+
+        vm.onToggleSearchApiKeyVisibility()
+        assertFalse(vm.uiState.value.searchApiKeyVisible)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onSaveSettings_persistsSearchProviderAndTrimmedApiKey() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_search_save_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onUpdateSearchProvider("brave")
+        vm.onUpdateSearchApiKey("   BSA_trimmed_key_123   ")
+
+        vm.onSaveSettings()
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.isSettingsSaved)
+        assertEquals("BSA_trimmed_key_123", vm.uiState.value.skillsConfig.searchApiKey)
+        assertEquals("brave", vm.uiState.value.skillsConfig.searchProvider)
+
+        val savedSkills = repository.getSkillsConfig()
+        assertEquals("brave", savedSkills.searchProvider)
+        assertEquals("BSA_trimmed_key_123", savedSkills.searchApiKey)
+
+        assertTrue(configFile.exists())
+        val json = org.json.JSONObject(configFile.readText(Charsets.UTF_8))
+        val skillsJson = json.getJSONObject("skills")
+        assertEquals("brave", skillsJson.getString("search_provider"))
+        assertEquals("BSA_trimmed_key_123", skillsJson.getString("search_api_key"))
+
+        tempDir.deleteRecursively()
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun hotUpdate_searchKeyWhileServerRunning_persistsImmediately() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_hot_search_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        // Enter initial key
+        vm.onUpdateSearchProvider("exa")
+        vm.onUpdateSearchApiKey("exa-initial-key")
+        vm.onSaveSettings()
+        testScheduler.advanceUntilIdle()
+
+        // Hot update while server is configured
+        vm.onUpdateSearchApiKey("exa-updated-key-hot")
+        vm.onSaveSettings()
+        testScheduler.advanceUntilIdle()
+
+        assertEquals("exa-updated-key-hot", vm.uiState.value.skillsConfig.searchApiKey)
+        assertEquals("exa", vm.uiState.value.skillsConfig.searchProvider)
+        assertEquals("exa-updated-key-hot", repository.getSkillsConfig().searchApiKey)
+
+        val json = org.json.JSONObject(configFile.readText(Charsets.UTF_8))
+        assertEquals("exa-updated-key-hot", json.getJSONObject("skills").getString("search_api_key"))
+
+        tempDir.deleteRecursively()
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun loadPersistedConfig_populatesSearchProviderAndApiKey() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        repository.saveSkillsConfig(
+            SkillsConfig(
+                webSearch = true,
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_FIRECRAWL,
+                searchApiKey = "fc-persisted-secret"
+            )
+        )
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_FIRECRAWL, vm.uiState.value.skillsConfig.searchProvider)
+        assertEquals("fc-persisted-secret", vm.uiState.value.skillsConfig.searchApiKey)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onUpdateSearchProvider_normalizesAndFallbacksInvalidProvider() = runTest(testDispatcher) {
+        val vm = ServerViewModel(
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.onUpdateSearchProvider("  TAVILY  ")
+        assertEquals("tavily", vm.uiState.value.skillsConfig.searchProvider)
+
+        vm.onUpdateSearchProvider("invalid_bogus_provider")
+        assertEquals("brave", vm.uiState.value.skillsConfig.searchProvider)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
     fun init_withMemoryManager_refreshesStorageUsage() = runTest(testDispatcher) {
         val fakeMemory = FakeMemoryManager(storageBytes = 4404019L, formattedSize = "4.2 MB")
         val vm = ServerViewModel(

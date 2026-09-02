@@ -496,4 +496,164 @@ class ConfigSerializerTest {
         assertFalse(parsed.skills.customSkills.containsKey("nested_object"))
         assertFalse(parsed.skills.customSkills.containsKey("number_val"))
     }
+
+    @Test
+    fun generateJson_withSearchConfig_serializesProviderAndKeyInSkills() {
+        val config = HermesConfig(
+            skills = SkillsConfig(
+                webSearch = true,
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_BRAVE,
+                searchApiKey = "BSA_test_12345",
+                fileManager = true,
+                bashRunner = true,
+                cronScheduler = true
+            )
+        )
+
+        val jsonString = serializer.generateJson(config)
+        val json = JSONObject(jsonString)
+
+        assertTrue(json.has("skills"))
+        val skillsJson = json.getJSONObject("skills")
+        assertTrue(skillsJson.getBoolean("web_search"))
+        assertEquals("brave", skillsJson.getString("search_provider"))
+        assertEquals("BSA_test_12345", skillsJson.getString("search_api_key"))
+    }
+
+    @Test
+    fun generateJson_withAllSupportedSearchProviders() {
+        val providers = listOf(
+            SkillsConfig.SEARCH_PROVIDER_BRAVE,
+            SkillsConfig.SEARCH_PROVIDER_TAVILY,
+            SkillsConfig.SEARCH_PROVIDER_FIRECRAWL,
+            SkillsConfig.SEARCH_PROVIDER_EXA
+        )
+
+        for (provider in providers) {
+            val config = HermesConfig(
+                skills = SkillsConfig(
+                    searchProvider = provider,
+                    searchApiKey = "key_for_$provider"
+                )
+            )
+            val json = JSONObject(serializer.generateJson(config))
+            val skillsJson = json.getJSONObject("skills")
+            assertEquals(provider, skillsJson.getString("search_provider"))
+            assertEquals("key_for_$provider", skillsJson.getString("search_api_key"))
+        }
+    }
+
+    @Test
+    fun parseJson_withExplicitSearchFields_deserializesCorrectly() {
+        val jsonString = """
+            {
+                "version": 1,
+                "skills": {
+                    "web_search": true,
+                    "search_provider": "tavily",
+                    "search_api_key": "tvly-secret-abc",
+                    "file_manager": true,
+                    "bash_runner": true,
+                    "cron_scheduler": true
+                }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertEquals("tavily", parsed.skills.searchProvider)
+        assertEquals("tvly-secret-abc", parsed.skills.searchApiKey)
+        assertTrue(parsed.skills.webSearch)
+    }
+
+    @Test
+    fun parseJson_legacyConfigWithoutSearchFields_defaultsToBraveAndEmptyKey() {
+        val jsonString = """
+            {
+                "version": 1,
+                "skills": {
+                    "web_search": true,
+                    "file_manager": true,
+                    "bash_runner": true,
+                    "cron_scheduler": true
+                }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_BRAVE, parsed.skills.searchProvider)
+        assertEquals("", parsed.skills.searchApiKey)
+    }
+
+    @Test
+    fun parseJson_legacyConfigWithoutSkillsBlock_defaultsToBraveAndEmptyKey() {
+        val jsonString = """
+            {
+                "version": 1,
+                "provider": { "name": "nous_portal" }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_BRAVE, parsed.skills.searchProvider)
+        assertEquals("", parsed.skills.searchApiKey)
+    }
+
+    @Test
+    fun searchProviderAndKey_notExposedInCustomSkills() {
+        val jsonString = """
+            {
+                "skills": {
+                    "web_search": true,
+                    "search_provider": "exa",
+                    "search_api_key": "exa-test-key",
+                    "custom_tool": true
+                }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertEquals("exa", parsed.skills.searchProvider)
+        assertEquals("exa-test-key", parsed.skills.searchApiKey)
+        assertFalse(parsed.skills.customSkills.containsKey("search_provider"))
+        assertFalse(parsed.skills.customSkills.containsKey("search_api_key"))
+        assertTrue(parsed.skills.customSkills.containsKey("custom_tool"))
+
+        val installedSkills = parsed.skills.toInstalledSkills()
+        assertFalse(installedSkills.any { it.id == "search_provider" })
+        assertFalse(installedSkills.any { it.id == "search_api_key" })
+        assertTrue(installedSkills.any { it.id == "custom_tool" })
+
+        assertFalse(parsed.skills.isSkillEnabled("search_provider"))
+        assertFalse(parsed.skills.isSkillEnabled("search_api_key"))
+
+        val toggled = parsed.skills.withSkillToggled("search_provider", true)
+        assertFalse(toggled.customSkills.containsKey("search_provider"))
+        assertFalse(toggled.isSkillEnabled("search_provider"))
+    }
+
+    @Test
+    fun serialize_and_deserialize_roundTripPreservesSearchCredentials() {
+        val config = HermesConfig(
+            skills = SkillsConfig(
+                webSearch = true,
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_FIRECRAWL,
+                searchApiKey = "fc-secret-key-123",
+                fileManager = true,
+                bashRunner = false,
+                cronScheduler = true
+            )
+        )
+
+        val serializeResult = serializer.serialize(config)
+        assertTrue(serializeResult.isSuccess)
+
+        val deserializeResult = serializer.deserialize()
+        assertTrue(deserializeResult.isSuccess)
+
+        val loaded = deserializeResult.getOrThrow()
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_FIRECRAWL, loaded.skills.searchProvider)
+        assertEquals("fc-secret-key-123", loaded.skills.searchApiKey)
+        assertTrue(loaded.skills.webSearch)
+        assertFalse(loaded.skills.bashRunner)
+    }
 }

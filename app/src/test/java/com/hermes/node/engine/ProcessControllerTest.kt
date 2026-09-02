@@ -1,5 +1,8 @@
 package com.hermes.node.engine
 
+import com.hermes.node.data.ConfigSerializer
+import com.hermes.node.data.model.HermesConfig
+import com.hermes.node.data.model.SkillsConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -223,6 +226,291 @@ class ProcessControllerTest {
         assertTrue(config.environment.containsKey("HERMES_CONFIG_PATH"))
         assertTrue(config.fullCommand.isNotEmpty())
         assertEquals(listOf("-m", "hermes", "gateway", "run"), config.arguments)
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_injectsBraveSearchEnvVars_andSyncsHermesFiles() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_brave_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val hermesConfig = HermesConfig(
+            skills = SkillsConfig(
+                webSearch = true,
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_BRAVE,
+                searchApiKey = "BSA_test_secret_key"
+            )
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig
+        )
+
+        assertEquals("BSA_test_secret_key", config.environment["BRAVE_SEARCH_API_KEY"])
+        assertEquals("BSA_test_secret_key", config.environment["BRAVE_API_KEY"])
+        assertEquals("brave", config.environment["HERMES_SEARCH_PROVIDER"])
+
+        // Check .hermes/.env and config.yaml
+        val hermesDir = File(tempDir, ".hermes")
+        assertTrue(hermesDir.exists())
+
+        val envFile = File(hermesDir, ".env")
+        assertTrue(envFile.exists())
+        val envContent = envFile.readText(Charsets.UTF_8)
+        assertTrue(envContent.contains("HERMES_SEARCH_PROVIDER=brave"))
+        assertTrue(envContent.contains("BRAVE_SEARCH_API_KEY=BSA_test_secret_key"))
+        assertTrue(envContent.contains("BRAVE_API_KEY=BSA_test_secret_key"))
+
+        val yamlFile = File(hermesDir, "config.yaml")
+        assertTrue(yamlFile.exists())
+        val yamlContent = yamlFile.readText(Charsets.UTF_8)
+        assertTrue(yamlContent.contains("search_provider: \"brave\""))
+        assertTrue(yamlContent.contains("search_api_key: \"BSA_test_secret_key\""))
+
+        // Assert POSIX 0600 permissions
+        for (file in listOf(envFile, yamlFile)) {
+            try {
+                val perms = java.nio.file.Files.getPosixFilePermissions(file.toPath())
+                assertEquals(
+                    setOf(
+                        java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                        java.nio.file.attribute.PosixFilePermission.OWNER_WRITE
+                    ),
+                    perms
+                )
+            } catch (_: UnsupportedOperationException) {
+                assertTrue("File should be readable by owner", file.canRead())
+                assertTrue("File should be writable by owner", file.canWrite())
+                assertFalse("File should not be executable", file.canExecute())
+            }
+        }
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_whenWebSearchDisabled_doesNotInjectSearchEnvVars_evenWithKey() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_disabled_search_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val hermesConfig = HermesConfig(
+            skills = SkillsConfig(
+                webSearch = false,
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_BRAVE,
+                searchApiKey = "BSA_valid_key_but_web_search_off"
+            )
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig
+        )
+
+        assertFalse(config.environment.containsKey("BRAVE_SEARCH_API_KEY"))
+        assertFalse(config.environment.containsKey("BRAVE_API_KEY"))
+        assertFalse(config.environment.containsKey("HERMES_SEARCH_PROVIDER"))
+
+        val envFile = File(File(tempDir, ".hermes"), ".env")
+        if (envFile.exists()) {
+            val envContent = envFile.readText(Charsets.UTF_8)
+            assertFalse(envContent.contains("BRAVE_SEARCH_API_KEY"))
+            assertFalse(envContent.contains("HERMES_SEARCH_PROVIDER"))
+        }
+
+        val yamlFile = File(File(tempDir, ".hermes"), "config.yaml")
+        if (yamlFile.exists()) {
+            val yamlContent = yamlFile.readText(Charsets.UTF_8)
+            assertFalse(yamlContent.contains("search_api_key"))
+            assertTrue(yamlContent.contains("web_search: false"))
+        }
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun syncHermesConfig_preservesExistingEnvAndYamlLines_andPurgesObsoleteSearchKeys() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_sync_preserve_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val hermesDir = File(tempDir, ".hermes").apply { mkdirs() }
+
+        // Prepopulate .env with custom variable and an old search provider
+        val envFile = File(hermesDir, ".env")
+        envFile.writeText(
+            """
+            CUSTOM_VAR=123
+            BRAVE_SEARCH_API_KEY=old_brave_key
+            HERMES_SEARCH_PROVIDER=brave
+            ANOTHER_VAR=hello
+            """.trimIndent() + "\n",
+            Charsets.UTF_8
+        )
+
+        // Prepopulate config.yaml with custom settings and old web section
+        val yamlFile = File(hermesDir, "config.yaml")
+        yamlFile.writeText(
+            """
+            model: "claude-3-5-sonnet"
+            temperature: 0.7
+            web:
+              provider: "brave"
+              api_key: "old_brave_key"
+            custom_flag: true
+            """.trimIndent() + "\n",
+            Charsets.UTF_8
+        )
+
+        // Sync with new provider: Tavily
+        val newConfig = HermesConfig(
+            skills = SkillsConfig(
+                webSearch = true,
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_TAVILY,
+                searchApiKey = "tvly-new-key-456"
+            )
+        )
+        ProcessConfig.syncHermesConfig(tempDir, newConfig)
+
+        // Verify .env: custom vars preserved, old brave keys purged, new tavily key present
+        val envContent = envFile.readText(Charsets.UTF_8)
+        assertTrue(envContent.contains("CUSTOM_VAR=123"))
+        assertTrue(envContent.contains("ANOTHER_VAR=hello"))
+        assertTrue(envContent.contains("HERMES_SEARCH_PROVIDER=tavily"))
+        assertTrue(envContent.contains("TAVILY_API_KEY=tvly-new-key-456"))
+        assertFalse(envContent.contains("BRAVE_SEARCH_API_KEY"))
+        assertFalse(envContent.contains("old_brave_key"))
+
+        // Verify config.yaml: non-search lines preserved, old web section replaced
+        val yamlContent = yamlFile.readText(Charsets.UTF_8)
+        assertTrue(yamlContent.contains("model: \"claude-3-5-sonnet\""))
+        assertTrue(yamlContent.contains("temperature: 0.7"))
+        assertTrue(yamlContent.contains("custom_flag: true"))
+        assertTrue(yamlContent.contains("search_provider: \"tavily\""))
+        assertTrue(yamlContent.contains("search_api_key: \"tvly-new-key-456\""))
+        assertFalse(yamlContent.contains("old_brave_key"))
+
+        // Verify POSIX 0600 permissions on envFile and yamlFile
+        for (file in listOf(envFile, yamlFile)) {
+            try {
+                val perms = java.nio.file.Files.getPosixFilePermissions(file.toPath())
+                assertEquals(
+                    setOf(
+                        java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                        java.nio.file.attribute.PosixFilePermission.OWNER_WRITE
+                    ),
+                    perms
+                )
+            } catch (_: UnsupportedOperationException) {
+                assertTrue("File should be readable by owner", file.canRead())
+                assertTrue("File should be writable by owner", file.canWrite())
+                assertFalse("File should not be executable", file.canExecute())
+            }
+        }
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_injectsTavilySearchEnvVars() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_tavily_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val hermesConfig = HermesConfig(
+            skills = SkillsConfig(
+                webSearch = true,
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_TAVILY,
+                searchApiKey = "tvly-test-12345"
+            )
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig
+        )
+
+        assertEquals("tvly-test-12345", config.environment["TAVILY_API_KEY"])
+        assertEquals("tavily", config.environment["HERMES_SEARCH_PROVIDER"])
+        assertFalse(config.environment.containsKey("BRAVE_SEARCH_API_KEY"))
+
+        val envFile = File(File(tempDir, ".hermes"), ".env")
+        assertTrue(envFile.readText(Charsets.UTF_8).contains("TAVILY_API_KEY=tvly-test-12345"))
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_injectsFirecrawlAndExaSearchEnvVars() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_fc_exa_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val fcConfig = HermesConfig(
+            skills = SkillsConfig(
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_FIRECRAWL,
+                searchApiKey = "fc-key-1"
+            )
+        )
+        val configFc = ProcessConfig.createHermesDaemonConfig(filesDir = tempDir, hermesConfig = fcConfig)
+        assertEquals("fc-key-1", configFc.environment["FIRECRAWL_API_KEY"])
+        assertEquals("firecrawl", configFc.environment["HERMES_SEARCH_PROVIDER"])
+
+        val exaConfig = HermesConfig(
+            skills = SkillsConfig(
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_EXA,
+                searchApiKey = "exa-key-2"
+            )
+        )
+        val configExa = ProcessConfig.createHermesDaemonConfig(filesDir = tempDir, hermesConfig = exaConfig)
+        assertEquals("exa-key-2", configExa.environment["EXA_API_KEY"])
+        assertEquals("exa", configExa.environment["HERMES_SEARCH_PROVIDER"])
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_whenSearchKeyBlank_doesNotInjectSearchEnvVars() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_blank_search_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val hermesConfig = HermesConfig(
+            skills = SkillsConfig(
+                webSearch = true,
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_BRAVE,
+                searchApiKey = "   "
+            )
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig
+        )
+
+        assertFalse(config.environment.containsKey("BRAVE_SEARCH_API_KEY"))
+        assertFalse(config.environment.containsKey("BRAVE_API_KEY"))
+        assertFalse(config.environment.containsKey("HERMES_SEARCH_PROVIDER"))
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_readsSearchConfigFromHermesJson() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_json_search_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+        serializer.serialize(
+            HermesConfig(
+                skills = SkillsConfig(
+                    searchProvider = SkillsConfig.SEARCH_PROVIDER_TAVILY,
+                    searchApiKey = "tvly-from-json"
+                )
+            )
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(filesDir = tempDir)
+
+        assertEquals("tvly-from-json", config.environment["TAVILY_API_KEY"])
+        assertEquals("tavily", config.environment["HERMES_SEARCH_PROVIDER"])
 
         tempDir.deleteRecursively()
     }

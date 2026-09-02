@@ -407,6 +407,81 @@ class ConfigRepositoryTest {
         assertFalse(retrieved.customSkills.containsKey("old_tool"))
         assertEquals(true, retrieved.customSkills["kept_tool"])
     }
+
+    @Test
+    fun searchConfig_defaultsToBraveAndEmptyKey() {
+        assertEquals("brave", repository.getSearchProvider())
+        assertEquals("", repository.getSearchApiKey())
+
+        val skills = repository.getSkillsConfig()
+        assertEquals("brave", skills.searchProvider)
+        assertEquals("", skills.searchApiKey)
+    }
+
+    @Test
+    fun saveSearchConfig_and_getSearchConfig_persistsCredentials() {
+        repository.saveSearchConfig(SkillsConfig.SEARCH_PROVIDER_TAVILY, "tvly-test-secret-123")
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_TAVILY, repository.getSearchProvider())
+        assertEquals("tvly-test-secret-123", repository.getSearchApiKey())
+
+        val skills = repository.getSkillsConfig()
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_TAVILY, skills.searchProvider)
+        assertEquals("tvly-test-secret-123", skills.searchApiKey)
+    }
+
+    @Test
+    fun individualSearchAccessors_persistAndRetrieve() {
+        repository.saveSearchProvider(SkillsConfig.SEARCH_PROVIDER_EXA)
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_EXA, repository.getSearchProvider())
+
+        repository.saveSearchApiKey("exa-test-api-key")
+        assertEquals("exa-test-api-key", repository.getSearchApiKey())
+    }
+
+    @Test
+    fun saveSkillsConfig_persistsSearchProviderAndKey() {
+        val skills = SkillsConfig(
+            webSearch = true,
+            searchProvider = SkillsConfig.SEARCH_PROVIDER_FIRECRAWL,
+            searchApiKey = "fc-key-999"
+        )
+        repository.saveSkillsConfig(skills)
+
+        val retrieved = repository.getSkillsConfig()
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_FIRECRAWL, retrieved.searchProvider)
+        assertEquals("fc-key-999", retrieved.searchApiKey)
+    }
+
+    @Test
+    fun saveConfig_persistsSearchCredentials() {
+        val config = HermesConfig(
+            skills = SkillsConfig(
+                webSearch = true,
+                searchProvider = SkillsConfig.SEARCH_PROVIDER_BRAVE,
+                searchApiKey = "BSA_roundtrip_key"
+            )
+        )
+        repository.saveConfig(config)
+
+        val retrieved = repository.getConfig()
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_BRAVE, retrieved.skills.searchProvider)
+        assertEquals("BSA_roundtrip_key", retrieved.skills.searchApiKey)
+    }
+
+    @Test
+    fun clear_resetsSearchCredentialsToDefaults() {
+        repository.saveSearchConfig(SkillsConfig.SEARCH_PROVIDER_TAVILY, "tvly-to-clear")
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_TAVILY, repository.getSearchProvider())
+        assertEquals("tvly-to-clear", repository.getSearchApiKey())
+
+        repository.clear()
+
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_BRAVE, repository.getSearchProvider())
+        assertEquals("", repository.getSearchApiKey())
+        val skills = repository.getSkillsConfig()
+        assertEquals(SkillsConfig.SEARCH_PROVIDER_BRAVE, skills.searchProvider)
+        assertEquals("", skills.searchApiKey)
+    }
 }
 
 class FakeSharedPreferences : SharedPreferences {

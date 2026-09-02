@@ -265,5 +265,10 @@ class BootReceiverTest {
         override fun saveSkillsConfig(skills: SkillsConfig) {}
         override fun isSkillEnabled(skillId: String): Boolean = true
         override fun saveSkillEnabled(skillId: String, enabled: Boolean) {}
+        override fun getSearchProvider(): String = "brave"
+        override fun saveSearchProvider(provider: String) {}
+        override fun getSearchApiKey(): String = ""
+        override fun saveSearchApiKey(apiKey: String) {}
+        override fun saveSearchConfig(provider: String, apiKey: String) {}
     }
 }

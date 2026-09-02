@@ -69,24 +69,28 @@ data class SkillInfo(
 
 data class SkillsConfig(
     val webSearch: Boolean = true,
+    val searchProvider: String = SEARCH_PROVIDER_BRAVE,
+    val searchApiKey: String = "",
     val fileManager: Boolean = true,
     val bashRunner: Boolean = true,
     val cronScheduler: Boolean = true,
     val customSkills: Map<String, Boolean> = emptyMap()
 ) {
-    fun isSkillEnabled(skillId: String): Boolean = when (skillId) {
-        SKILL_WEB_SEARCH -> webSearch
-        SKILL_FILE_MANAGER -> fileManager
-        SKILL_BASH_RUNNER -> bashRunner
-        SKILL_CRON_SCHEDULER -> cronScheduler
+    fun isSkillEnabled(skillId: String): Boolean = when {
+        skillId in NON_SKILL_KEYS -> false
+        skillId == SKILL_WEB_SEARCH -> webSearch
+        skillId == SKILL_FILE_MANAGER -> fileManager
+        skillId == SKILL_BASH_RUNNER -> bashRunner
+        skillId == SKILL_CRON_SCHEDULER -> cronScheduler
         else -> customSkills[skillId] ?: true
     }
 
-    fun withSkillToggled(skillId: String, enabled: Boolean): SkillsConfig = when (skillId) {
-        SKILL_WEB_SEARCH -> copy(webSearch = enabled)
-        SKILL_FILE_MANAGER -> copy(fileManager = enabled)
-        SKILL_BASH_RUNNER -> copy(bashRunner = enabled)
-        SKILL_CRON_SCHEDULER -> copy(cronScheduler = enabled)
+    fun withSkillToggled(skillId: String, enabled: Boolean): SkillsConfig = when {
+        skillId in NON_SKILL_KEYS -> this
+        skillId == SKILL_WEB_SEARCH -> copy(webSearch = enabled)
+        skillId == SKILL_FILE_MANAGER -> copy(fileManager = enabled)
+        skillId == SKILL_BASH_RUNNER -> copy(bashRunner = enabled)
+        skillId == SKILL_CRON_SCHEDULER -> copy(cronScheduler = enabled)
         else -> copy(customSkills = customSkills + (skillId to enabled))
     }
 
@@ -98,7 +102,7 @@ data class SkillsConfig(
             CORE_SKILL_CRON_SCHEDULER.copy(enabled = cronScheduler)
         )
         val customList = customSkills
-            .filterKeys { it !in CORE_SKILL_IDS }
+            .filterKeys { it !in CORE_SKILL_IDS && it !in NON_SKILL_KEYS }
             .map { (id, enabled) ->
                 SkillInfo(
                     id = id,
@@ -116,6 +120,31 @@ data class SkillsConfig(
         const val SKILL_FILE_MANAGER = "file_manager"
         const val SKILL_BASH_RUNNER = "bash_runner"
         const val SKILL_CRON_SCHEDULER = "cron_scheduler"
+
+        const val SEARCH_PROVIDER_BRAVE = "brave"
+        const val SEARCH_PROVIDER_TAVILY = "tavily"
+        const val SEARCH_PROVIDER_FIRECRAWL = "firecrawl"
+        const val SEARCH_PROVIDER_EXA = "exa"
+
+        val NON_SKILL_KEYS = setOf(
+            "search_provider",
+            "search_api_key"
+        )
+
+        val SUPPORTED_SEARCH_PROVIDERS = listOf(
+            SEARCH_PROVIDER_BRAVE,
+            SEARCH_PROVIDER_TAVILY,
+            SEARCH_PROVIDER_FIRECRAWL,
+            SEARCH_PROVIDER_EXA
+        )
+
+        fun formatSearchProviderLabel(provider: String): String = when (provider.lowercase().trim()) {
+            SEARCH_PROVIDER_BRAVE -> "Brave Search (Default)"
+            SEARCH_PROVIDER_TAVILY -> "Tavily"
+            SEARCH_PROVIDER_FIRECRAWL -> "Firecrawl"
+            SEARCH_PROVIDER_EXA -> "Exa"
+            else -> provider.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+        }
 
         val CORE_SKILL_IDS = setOf(
             SKILL_WEB_SEARCH,
