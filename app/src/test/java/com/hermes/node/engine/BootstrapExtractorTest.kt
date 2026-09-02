@@ -106,7 +106,7 @@ class BootstrapExtractorTest {
         // missing hermes binary
 
         val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
-        marker.writeText("version=1")
+        marker.writeText("version=${BootstrapExtractor.BOOTSTRAP_VERSION}")
 
         assertFalse(extractor.isBootstrapInstalled())
     }
@@ -119,7 +119,7 @@ class BootstrapExtractorTest {
         File(usrDir, "hermes").apply { writeText("dummy"); setExecutable(true) }
 
         val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
-        marker.writeText("version=1\ntimestamp=123456\n")
+        marker.writeText("version=${BootstrapExtractor.BOOTSTRAP_VERSION}\ntimestamp=123456\n")
 
         assertTrue(extractor.isBootstrapInstalled())
     }
@@ -156,9 +156,9 @@ class BootstrapExtractorTest {
         assertTrue(proot.canExecute())
         assertTrue(hermes.canExecute())
 
-        // Check marker exists and has version=1
+        // Check marker exists and has version=${BootstrapExtractor.BOOTSTRAP_VERSION}
         assertTrue(extractor.markerFile.exists())
-        assertTrue(extractor.markerFile.readText().contains("version=1"))
+        assertTrue(extractor.markerFile.readText().contains("version=${BootstrapExtractor.BOOTSTRAP_VERSION}"))
         assertTrue(extractor.isBootstrapInstalled())
 
         // Check progress reporting
@@ -350,7 +350,7 @@ class BootstrapExtractorTest {
         File(usrDir, "hermes").apply { writeText("dummy"); setExecutable(true) }
 
         val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
-        marker.writeText("version=1\ntimestamp=123456\n")
+        marker.writeText("version=${BootstrapExtractor.BOOTSTRAP_VERSION}\ntimestamp=123456\n")
 
         val health = extractor.checkHealth()
         assertTrue("Expected Healthy but got $health", health is HealthCheckResult.Healthy)
@@ -364,7 +364,7 @@ class BootstrapExtractorTest {
         // Missing hermes binary
 
         val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
-        marker.writeText("version=1\ntimestamp=123456\n")
+        marker.writeText("version=${BootstrapExtractor.BOOTSTRAP_VERSION}\ntimestamp=123456\n")
 
         val health = extractor.checkHealth()
         assertTrue("Expected Corrupted but got $health", health is HealthCheckResult.Corrupted)
@@ -386,7 +386,7 @@ class BootstrapExtractorTest {
         val health = extractor.checkHealth()
         assertTrue(health is HealthCheckResult.Corrupted)
         val corrupted = health as HealthCheckResult.Corrupted
-        assertTrue(corrupted.issues.any { it.contains("version mismatch") || it.contains("expected version=1") })
+        assertTrue(corrupted.issues.any { it.contains("version mismatch") || it.contains("expected version=${BootstrapExtractor.BOOTSTRAP_VERSION}") })
     }
 
     @Test
@@ -411,7 +411,7 @@ class BootstrapExtractorTest {
         File(usrDir, "hermes").apply { writeText("dummy"); setExecutable(true) }
 
         val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
-        marker.writeText("version=1\n")
+        marker.writeText("version=${BootstrapExtractor.BOOTSTRAP_VERSION}\n")
 
         val health = extractor.checkHealth()
         assertTrue(health is HealthCheckResult.Corrupted)
@@ -433,7 +433,7 @@ class BootstrapExtractorTest {
         File(usrDir, "python3").apply { writeText("corrupt"); setExecutable(true) }
         // proot and hermes missing
         val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
-        marker.writeText("version=1\n")
+        marker.writeText("version=${BootstrapExtractor.BOOTSTRAP_VERSION}\n")
 
         assertTrue(extractor.checkHealth() is HealthCheckResult.Corrupted)
 
@@ -483,7 +483,7 @@ class BootstrapExtractorTest {
         File(usrDir, "hermes").apply { writeText("dummy"); setExecutable(true) }
 
         val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
-        marker.writeText("version=1\n")
+        marker.writeText("version=${BootstrapExtractor.BOOTSTRAP_VERSION}\n")
 
         val health = extractor.checkHealth()
         assertTrue("Expected Healthy due to self-healing execute permission", health is HealthCheckResult.Healthy)
@@ -497,7 +497,7 @@ class BootstrapExtractorTest {
             writeText("READ_ONLY")
             setWritable(false)
         }
-        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME).apply { writeText("version=1\n") }
+        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME).apply { writeText("version=${BootstrapExtractor.BOOTSTRAP_VERSION}\n") }
 
         val tarBytes = createTestTarXz(getStandardArchiveEntries())
         val inStream = ByteArrayInputStream(tarBytes)
@@ -513,7 +513,7 @@ class BootstrapExtractorTest {
     fun cleanUserland_deletesUsrDirAndMarker_preservesOtherFiles() {
         val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
         File(usrDir, "python3").writeText("test")
-        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME).apply { writeText("version=1\n") }
+        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME).apply { writeText("version=${BootstrapExtractor.BOOTSTRAP_VERSION}\n") }
         val userFile = File(tempDir, "agent_data.db").apply { writeText("keep me") }
 
         assertTrue(usrDir.exists())

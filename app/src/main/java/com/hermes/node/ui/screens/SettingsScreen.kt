@@ -1,8 +1,13 @@
 package com.hermes.node.ui.screens
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -76,6 +81,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -90,6 +96,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.hermes.node.data.model.SkillsConfig
 import com.hermes.node.ui.theme.DarkBorder
 import com.hermes.node.ui.theme.DarkSurface
@@ -587,6 +594,35 @@ fun SettingsScreen(
             color = MaterialTheme.colorScheme.onBackground
         )
 
+        // API 28 (Android 9) requires a runtime WRITE_EXTERNAL_STORAGE grant to write to the
+        // public Downloads directory, so request it before dispatching the export action.
+        var isStoragePermissionDenied by remember { mutableStateOf(false) }
+        val storagePermissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) {
+                isStoragePermissionDenied = false
+                onExportMemoryToDownloads()
+            } else {
+                isStoragePermissionDenied = true
+            }
+        }
+        val onExportBackupClicked = {
+            isStoragePermissionDenied = false
+            val requiresRuntimePermission = Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+            if (requiresRuntimePermission) {
+                val permission = Manifest.permission.WRITE_EXTERNAL_STORAGE
+                val alreadyGranted = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+                if (alreadyGranted) {
+                    onExportMemoryToDownloads()
+                } else {
+                    storagePermissionLauncher.launch(permission)
+                }
+            } else {
+                onExportMemoryToDownloads()
+            }
+        }
+
         // Episodic Memory & Storage Card
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -660,13 +696,22 @@ fun SettingsScreen(
                     }
                 }
 
+                // Backup consistency notice while the daemon is actively writing memory
+                if (state.status == ServerStatus.RUNNING) {
+                    Text(
+                        text = "⚠ Server is running — backups may be less consistent. Stop the server for a consistent snapshot.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = StatusStarting
+                    )
+                }
+
                 // Action Buttons: Export to Downloads & Share Backup
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = onExportMemoryToDownloads,
+                        onClick = onExportBackupClicked,
                         enabled = !state.isExportingMemory && !state.isResettingMemory,
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.buttonColors(
@@ -721,6 +766,14 @@ fun SettingsScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                     }
+                }
+
+                if (isStoragePermissionDenied) {
+                    Text(
+                        text = "Storage permission is required on Android 9 to export backups to public Downloads.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
 
                 // Clear Memory Button (Destructive action)

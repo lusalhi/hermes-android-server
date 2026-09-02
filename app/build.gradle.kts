@@ -53,6 +53,20 @@ android {
     testOptions {
         unitTests {
             isReturnDefaultValues = true
+            isIncludeAndroidResources = true
+            all { test ->
+                // JDK 17 module encapsulation: Robolectric reflects into these packages.
+                test.jvmArgs(
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-opens=java.base/java.nio=ALL-UNNAMED",
+                    "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+                    "--add-opens=java.base/java.text=ALL-UNNAMED",
+                    "--add-opens=java.base/java.net=ALL-UNNAMED",
+                    "--add-opens=java.base/java.security=ALL-UNNAMED"
+                )
+            }
         }
     }
 }
@@ -86,6 +100,13 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.0.0")
     testImplementation("org.json:json:20240303")
+    testImplementation("org.robolectric:robolectric:4.13")
+    // Robolectric 4.13 resolves conscrypt 2.5.2, whose uber jar lacks linux-aarch_64 natives.
+    testImplementation("org.conscrypt:conscrypt-openjdk-uber:2.7.0")
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test.ext:junit:1.1.5")
+    testImplementation("androidx.test:core:1.5.0")
 
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")

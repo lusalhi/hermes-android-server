@@ -165,11 +165,13 @@ class MemoryManager(
 
     override fun exportMemoryBackup(destinationZipFile: File?): Result<File> {
         var targetFile: File? = null
+        var stagingFile: File? = null
         return try {
             val fileToCreate = destinationZipFile ?: run {
                 val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
                 val backupDir = File(cacheDir, BACKUP_DIR_NAME)
                 if (!backupDir.exists()) backupDir.mkdirs()
+                purgeStaleBackupArchives(backupDir)
                 File(backupDir, "hermes-backup-$timestamp.zip")
             }
             targetFile = fileToCreate
@@ -178,10 +180,15 @@ class MemoryManager(
                 if (!parent.exists()) parent.mkdirs()
             }
 
+            // Write to a temporary staging file and atomically rename it into place so an
+            // interrupted write never leaves a corrupt archive at the destination path.
+            val temp = File(fileToCreate.parentFile, "${fileToCreate.name}.tmp")
+            stagingFile = temp
+
             val roots = getEpisodicMemoryRoots()
             var entryCount = 0
 
-            ZipOutputStream(BufferedOutputStream(FileOutputStream(fileToCreate))).use { zipOut ->
+            ZipOutputStream(BufferedOutputStream(FileOutputStream(temp))).use { zipOut ->
                 for (item in roots) {
                     if (item.isDirectory) {
                         val files = item.walkTopDown().filter { it.isFile }
@@ -223,6 +230,12 @@ class MemoryManager(
                 }
             }
 
+            if (fileToCreate.exists()) fileToCreate.delete()
+            if (!temp.renameTo(fileToCreate)) {
+                temp.copyTo(fileToCreate, overwrite = true)
+                temp.delete()
+            }
+
             Result.success(fileToCreate)
         } catch (e: Exception) {
             logWarn("Failed to create memory backup ZIP archive", e)
@@ -231,7 +244,32 @@ class MemoryManager(
                     if (it.exists()) it.delete()
                 } catch (_: Exception) {}
             }
+            stagingFile?.let {
+                try {
+                    if (it.exists()) it.delete()
+                } catch (_: Exception) {}
+            }
             Result.failure(e)
+        }
+    }
+
+    /**
+     * Purges previously staged backup archives so sensitive conversation ZIPs do not
+     * accumulate indefinitely in the cache directory. Runs before staging a new archive,
+     * so the newest archive (handed to share-sheet recipients) is always the one kept.
+     */
+    private fun purgeStaleBackupArchives(backupDir: File) {
+        try {
+            val staleArchives = backupDir.listFiles { file ->
+                file.isFile && file.name.startsWith("hermes-backup-") && file.name.endsWith(".zip")
+            } ?: return
+            for (archive in staleArchives) {
+                try {
+                    archive.delete()
+                } catch (_: Exception) {}
+            }
+        } catch (e: Exception) {
+            logWarn("Unable to purge stale backup archives from cache", e)
         }
     }
 
@@ -266,7 +304,13 @@ class MemoryManager(
 
                     contentValues.clear()
                     contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                    resolver.update(uri, contentValues, null, null)
+                    val finalizedRows = resolver.update(uri, contentValues, null, null)
+                    if (finalizedRows != 1) {
+                        try {
+                            resolver.delete(uri, null, null)
+                        } catch (_: Exception) {}
+                        throw IOException("Failed to finalize MediaStore entry for $fileName in Downloads")
+                    }
                 } catch (writeException: Exception) {
                     try {
                         resolver.delete(uri, null, null)
@@ -277,11 +321,14 @@ class MemoryManager(
                 return Result.success("Backup exported to Downloads/$DOWNLOAD_SUBDIR/$fileName")
             } else {
                 // API 28 or direct filesystem fallback
-                val baseDownloads = try {
+                val publicDownloads = try {
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 } catch (_: Throwable) {
                     null
-                } ?: File(filesDir.parentFile ?: filesDir, "Downloads")
+                }
+                // Fallback only for environments where the public directory cannot be resolved
+                // (e.g. JVM unit tests); production API 28 resolves the real public Downloads.
+                val baseDownloads = publicDownloads ?: File(filesDir.parentFile ?: filesDir, "Downloads")
 
                 val targetDir = File(baseDownloads, DOWNLOAD_SUBDIR)
                 if (!targetDir.exists()) {
@@ -290,7 +337,9 @@ class MemoryManager(
                 val destFile = File(targetDir, fileName)
                 tempZip.copyTo(destFile, overwrite = true)
 
-                return Result.success("Backup exported to Downloads/$DOWNLOAD_SUBDIR/$fileName")
+                // Report the actual destination so a fallback location is never
+                // misreported as the public Downloads directory.
+                return Result.success("Backup exported to ${destFile.parentFile?.path ?: "Downloads"}/$fileName")
             }
         } catch (e: Exception) {
             logWarn("Failed to export backup to Downloads", e)
@@ -305,6 +354,10 @@ class MemoryManager(
     }
 
     override fun getShareIntent(): Result<Intent> {
+        // Validate Android context before staging so a misconfigured manager never
+        // leaves an orphaned archive in the cache directory.
+        val ctx = context
+            ?: return Result.failure(IllegalStateException("Android Context required to generate Share Sheet intent"))
         return try {
             val backupResult = exportMemoryBackup()
             if (backupResult.isFailure) {
@@ -312,24 +365,31 @@ class MemoryManager(
             }
 
             val zipFile = backupResult.getOrThrow()
-            val ctx = context ?: throw IllegalStateException("Android Context required to generate Share Sheet intent")
-            val authority = "${ctx.packageName}.fileprovider"
-            val contentUri: Uri = FileProvider.getUriForFile(ctx, authority, zipFile)
+            try {
+                val authority = "${ctx.packageName}.fileprovider"
+                val contentUri: Uri = FileProvider.getUriForFile(ctx, authority, zipFile)
 
-            val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "application/zip"
-                putExtra(Intent.EXTRA_STREAM, contentUri)
-                putExtra(Intent.EXTRA_SUBJECT, "Hermes Node Episodic Memory Backup")
-                clipData = ClipData.newRawUri("Hermes Backup", contentUri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, contentUri)
+                    putExtra(Intent.EXTRA_SUBJECT, "Hermes Node Episodic Memory Backup")
+                    clipData = ClipData.newRawUri("Hermes Backup", contentUri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+
+                val chooserIntent = Intent.createChooser(sendIntent, "Share Hermes Backup").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+
+                Result.success(chooserIntent)
+            } catch (intentException: Exception) {
+                // The staged archive was never handed to a recipient, so clean it up.
+                try {
+                    if (zipFile.exists()) zipFile.delete()
+                } catch (_: Exception) {}
+                throw intentException
             }
-
-            val chooserIntent = Intent.createChooser(sendIntent, "Share Hermes Backup").apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-
-            Result.success(chooserIntent)
         } catch (e: Exception) {
             logWarn("Failed to generate share intent for memory backup", e)
             Result.failure(e)

@@ -119,11 +119,12 @@ interface ProcessRunner {
 }
 
 /**
- * Default process runner executing native ProcessBuilder commands.
+ * Default process runner executing native ProcessBuilder commands with Android interpreter fallback.
  */
 class DefaultProcessRunner : ProcessRunner {
     override fun run(config: ProcessConfig): Process {
-        val pb = ProcessBuilder(config.fullCommand)
+        val finalCommand = resolveExecutableCommand(config)
+        val pb = ProcessBuilder(finalCommand)
         if (config.workingDir != null) {
             pb.directory(config.workingDir)
         }
@@ -132,6 +133,80 @@ class DefaultProcessRunner : ProcessRunner {
         }
         pb.redirectErrorStream(config.redirectErrorStream)
         return pb.start()
+    }
+
+    companion object {
+        fun resolveExecutableCommand(config: ProcessConfig): List<String> {
+            val exeFile = File(config.executable)
+            if (!exeFile.exists()) {
+                return config.fullCommand
+            }
+
+            val isAndroid = File("/system/bin/sh").exists()
+            if (isAndroid) {
+                // On Android 10+ (API 29+), SELinux blocks direct execve() on files inside /data/user/0/ or /data/data/ (error=13 Permission denied).
+                // 1. For scripts / mock binaries, invoke via /system/bin/sh
+                // 2. For ELF binaries, invoke via /system/bin/linker64 or /system/bin/linker
+                val isElf = isElfBinary(exeFile)
+                return if (!isElf) {
+                    listOf("/system/bin/sh", config.executable) + config.arguments
+                } else {
+                    val linker = when {
+                        File("/system/bin/linker64").exists() -> "/system/bin/linker64"
+                        File("/system/bin/linker").exists() -> "/system/bin/linker"
+                        else -> null
+                    }
+                    if (linker != null) {
+                        listOf(linker, config.executable) + config.arguments
+                    } else {
+                        config.fullCommand
+                    }
+                }
+            }
+
+            // On standard desktop Linux, if script has missing interpreter, use available shell
+            if (isScriptWithMissingInterpreter(exeFile)) {
+                val availableShell = when {
+                    File("/bin/sh").exists() -> "/bin/sh"
+                    File("/usr/bin/sh").exists() -> "/usr/bin/sh"
+                    else -> null
+                }
+                if (availableShell != null) {
+                    return listOf(availableShell, config.executable) + config.arguments
+                }
+            }
+            return config.fullCommand
+        }
+
+        private fun isElfBinary(file: File): Boolean {
+            return try {
+                if (!file.isFile || file.length() < 4) return false
+                file.inputStream().use { stream ->
+                    val magic = ByteArray(4)
+                    val read = stream.read(magic)
+                    read == 4 && magic[0] == 0x7F.toByte() && magic[1] == 'E'.code.toByte() && magic[2] == 'L'.code.toByte() && magic[3] == 'F'.code.toByte()
+                }
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
+        private fun isScriptWithMissingInterpreter(file: File): Boolean {
+            return try {
+                if (!file.isFile || file.length() < 2) return false
+                file.bufferedReader().use { reader ->
+                    val firstLine = reader.readLine() ?: ""
+                    if (firstLine.startsWith("#!")) {
+                        val interpreter = firstLine.removePrefix("#!").trim().split(" ").firstOrNull() ?: ""
+                        interpreter.isNotEmpty() && !File(interpreter).exists()
+                    } else {
+                        false
+                    }
+                }
+            } catch (_: Throwable) {
+                false
+            }
+        }
     }
 }
 
@@ -146,6 +221,7 @@ interface ProcessControllerInterface {
     val stderr: InputStream?
     val stdin: OutputStream?
     val isAlive: Boolean
+    val lastErrorMessage: String? get() = null
 
     suspend fun start(config: ProcessConfig): Result<Long>
     suspend fun stop(timeoutMs: Long = ProcessController.DEFAULT_SIGKILL_TIMEOUT_MS): ProcessStopResult
@@ -190,6 +266,10 @@ open class ProcessController(
     override val exitCode: Int?
         get() = _exitCode
 
+    private var _lastErrorMessage: String? = null
+    override val lastErrorMessage: String?
+        get() = _lastErrorMessage
+
     private var _stdout: InputStream? = null
     override val stdout: InputStream?
         get() = _stdout
@@ -212,13 +292,24 @@ open class ProcessController(
     override suspend fun start(config: ProcessConfig): Result<Long> = withContext(ioDispatcher) {
         val currentState = _state.value
         if (currentState == ProcessState.RUNNING || currentState == ProcessState.STARTING || currentState == ProcessState.STOPPING) {
+            val err = "Process is already in state: $currentState"
+            _lastErrorMessage = err
             return@withContext Result.failure(
-                IllegalStateException("Process is already in state: $currentState")
+                IllegalStateException(err)
             )
         }
 
         _state.value = ProcessState.STARTING
         _exitCode = null
+        _lastErrorMessage = null
+
+        val exeFile = File(config.executable)
+        try {
+            Log.i(
+                TAG,
+                "Starting process: ${config.executable} (args=${config.arguments.joinToString(" ")}, exists=${exeFile.exists()}, canExecute=${exeFile.canExecute()}, size=${if (exeFile.exists()) exeFile.length() else 0}B, workingDir=${config.workingDir?.absolutePath})"
+            )
+        } catch (_: Throwable) {}
 
         try {
             val process = processRunner.run(config)
@@ -260,10 +351,12 @@ open class ProcessController(
             closeStreams()
             activeProcess = null
             _pid = null
+            val diagnostic = "Failed to launch '${config.executable}': [${e.javaClass.simpleName}] ${e.message} (file exists=${exeFile.exists()}, canExecute=${exeFile.canExecute()})"
+            _lastErrorMessage = diagnostic
             try {
-                Log.e(TAG, "Failed to start process: ${e.message}", e)
+                Log.e(TAG, diagnostic, e)
             } catch (ignored: Throwable) {}
-            Result.failure(e)
+            Result.failure(Exception(diagnostic, e))
         }
     }
 
@@ -369,6 +462,9 @@ open class ProcessController(
         val currentState = _state.value
         if (currentState == ProcessState.RUNNING) {
             _state.value = ProcessState.TERMINATED
+            if (code != 0) {
+                _lastErrorMessage = "Sub-process exited with exit code $code"
+            }
             closeStreams()
             activeProcess = null
             try {

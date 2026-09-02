@@ -2470,20 +2470,136 @@ class ServerViewModelTest {
         vm.stopMonitoring()
     }
 
+    @Test
+    fun onExportMemoryToDownloads_whenManagerThrows_surfacesErrorAndClearsFlag() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(exportToDownloadsThrowable = RuntimeException("boom during export"))
+        val vm = ServerViewModel(memoryManager = fakeMemory, defaultDispatcher = testDispatcher, ioDispatcher = testDispatcher)
+        testScheduler.advanceUntilIdle()
+
+        vm.onExportMemoryToDownloads()
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isExportingMemory)
+        assertFalse(state.isMemoryActionSuccess)
+        assertTrue(state.memoryActionMessage?.contains("Export failed") == true)
+        assertTrue(state.memoryActionMessage?.contains("boom during export") == true)
+        assertTrue(state.logs.any { it.message.contains("boom during export") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onShareMemoryBackup_whenManagerThrows_surfacesErrorAndClearsFlag() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(getShareIntentThrowable = RuntimeException("share exploded"))
+        val vm = ServerViewModel(memoryManager = fakeMemory, defaultDispatcher = testDispatcher, ioDispatcher = testDispatcher)
+        testScheduler.advanceUntilIdle()
+
+        vm.onShareMemoryBackup { }
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isExportingMemory)
+        assertFalse(state.isMemoryActionSuccess)
+        assertTrue(state.memoryActionMessage?.contains("Share failed") == true)
+        assertTrue(state.memoryActionMessage?.contains("share exploded") == true)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun onConfirmClearMemory_whenManagerThrows_surfacesErrorAndClearsFlag() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(clearEpisodicThrowable = RuntimeException("wipe exploded"))
+        val vm = ServerViewModel(memoryManager = fakeMemory, defaultDispatcher = testDispatcher, ioDispatcher = testDispatcher)
+        testScheduler.advanceUntilIdle()
+
+        vm.onShowClearMemoryDialog()
+        vm.onConfirmClearMemory()
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isResettingMemory)
+        assertFalse(state.showClearMemoryDialog)
+        assertFalse(state.isMemoryActionSuccess)
+        assertTrue(state.memoryActionMessage?.contains("Wipe failed") == true)
+        assertTrue(state.memoryActionMessage?.contains("wipe exploded") == true)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun refreshStorageUsage_whenCalculationThrows_surfacesErrorInUi() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(calculateStorageThrowable = RuntimeException("filesystem unreadable"))
+        val vm = ServerViewModel(memoryManager = fakeMemory, defaultDispatcher = testDispatcher, ioDispatcher = testDispatcher)
+
+        // The initial refresh on init must not crash the coroutine scope; it surfaces an error.
+        testScheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isMemoryActionSuccess)
+        assertTrue(state.memoryActionMessage?.contains("Storage check failed") == true)
+        assertTrue(state.logs.any { it.message.contains("filesystem unreadable") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun overlappingMemoryActions_cancelledJobDoesNotClearNewerOperationFlag() = runTest(testDispatcher) {
+        val fakeMemory = FakeMemoryManager(
+            exportResult = Result.success("Backup exported"),
+            shareResult = Result.success(Intent(Intent.ACTION_SEND))
+        )
+        val vm = ServerViewModel(memoryManager = fakeMemory, defaultDispatcher = testDispatcher, ioDispatcher = testDispatcher)
+        testScheduler.advanceUntilIdle()
+
+        val isExportingWhenShareStarted = booleanArrayOf(false)
+        fakeMemory.onGetShareIntentCall = {
+            isExportingWhenShareStarted[0] = vm.uiState.value.isExportingMemory
+        }
+        // Simulate a share being triggered while an export is mid-flight: the share cancels
+        // the export job, and the cancelled job's cleanup must not clear the newer flag.
+        fakeMemory.onExportToDownloadsCall = {
+            vm.onShareMemoryBackup { }
+        }
+
+        vm.onExportMemoryToDownloads()
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(
+            "isExportingMemory must remain set while the newer share operation runs",
+            isExportingWhenShareStarted[0]
+        )
+        assertFalse("Flag must be cleared once the newest operation completes", vm.uiState.value.isExportingMemory)
+        assertTrue(
+            "Final message should come from the newer share operation",
+            vm.uiState.value.memoryActionMessage?.contains("share", ignoreCase = true) == true
+        )
+
+        vm.stopMonitoring()
+    }
+
     private class FakeMemoryManager(
         var storageBytes: Long = 0L,
         var formattedSize: String = "0 B",
         var exportResult: Result<String> = Result.success("Backup exported to Downloads/HermesNode/test.zip"),
         var shareResult: Result<Intent> = Result.success(Intent(Intent.ACTION_SEND)),
-        var clearResult: Result<Boolean> = Result.success(true)
+        var clearResult: Result<Boolean> = Result.success(true),
+        var calculateStorageThrowable: Throwable? = null,
+        var exportToDownloadsThrowable: Throwable? = null,
+        var getShareIntentThrowable: Throwable? = null,
+        var clearEpisodicThrowable: Throwable? = null
     ) : MemoryManagerInterface {
         var calculateStorageCalls = 0
         var exportToDownloadsCalls = 0
         var getShareIntentCalls = 0
         var clearEpisodicMemoryCalls = 0
 
+        var onExportToDownloadsCall: (() -> Unit)? = null
+        var onGetShareIntentCall: (() -> Unit)? = null
+
         override fun calculateStorageUsage(): Long {
             calculateStorageCalls++
+            calculateStorageThrowable?.let { throw it }
             return storageBytes
         }
 
@@ -2498,16 +2614,21 @@ class ServerViewModelTest {
 
         override fun exportToDownloads(): Result<String> {
             exportToDownloadsCalls++
+            onExportToDownloadsCall?.invoke()
+            exportToDownloadsThrowable?.let { throw it }
             return exportResult
         }
 
         override fun getShareIntent(): Result<Intent> {
             getShareIntentCalls++
+            onGetShareIntentCall?.invoke()
+            getShareIntentThrowable?.let { throw it }
             return shareResult
         }
 
         override fun clearEpisodicMemory(): Result<Boolean> {
             clearEpisodicMemoryCalls++
+            clearEpisodicThrowable?.let { throw it }
             if (clearResult.isSuccess) {
                 storageBytes = 0L
                 formattedSize = "0 B"

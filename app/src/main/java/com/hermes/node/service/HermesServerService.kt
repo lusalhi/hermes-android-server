@@ -37,10 +37,18 @@ open class HermesServerService : Service() {
     var processController: ProcessControllerInterface? = null
     var logStreamer: LogStreamerInterface? = null
     var tunnelManager: TunnelManagerInterface? = null
+    var telegramGatewayManager: com.hermes.node.engine.TelegramGatewayManagerInterface? = null
     internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
     internal var serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var processExitListener: ((Int) -> Unit)? = null
     private var processStateCollectorJob: Job? = null
+
+    internal fun ensureTelegramGatewayManager(): com.hermes.node.engine.TelegramGatewayManagerInterface {
+        if (telegramGatewayManager == null) {
+            telegramGatewayManager = com.hermes.node.engine.TelegramGatewayManager(ioDispatcher = ioDispatcher)
+        }
+        return telegramGatewayManager!!
+    }
 
     internal fun ensureTunnelManager(): TunnelManagerInterface {
         if (tunnelManager == null) {
@@ -127,7 +135,15 @@ open class HermesServerService : Service() {
 
     internal open fun onProcessTerminatedUnexpectedly(exitCode: Int) {
         try {
+            logStreamer?.append("Sub-process terminated unexpectedly with exit code $exitCode", com.hermes.node.viewmodel.LogLevel.WARN)
+        } catch (_: Throwable) {}
+        try {
             stopTunnelBlocking()
+        } catch (_: Throwable) {}
+        try {
+            serviceScope.launch(ioDispatcher) {
+                try { telegramGatewayManager?.stop() } catch (_: Throwable) {}
+            }
         } catch (_: Throwable) {}
         try {
             if (wakeLockManager?.isHeld == true) {
@@ -180,6 +196,11 @@ open class HermesServerService : Service() {
         processStateCollectorJob = null
         try {
             stopTunnelBlocking()
+        } catch (_: Throwable) {}
+        try {
+            runBlocking(ioDispatcher) {
+                telegramGatewayManager?.stop()
+            }
         } catch (_: Throwable) {}
         try {
             logStreamer?.stop()
@@ -272,18 +293,27 @@ open class HermesServerService : Service() {
         val controller = processController
         if (controller != null) {
             val targetConfig = config ?: ProcessConfig.createHermesDaemonConfig(safeFilesDir)
+            try {
+                logStreamer?.append("Launching Hermes daemon: ${targetConfig.fullCommand.joinToString(" ")}", com.hermes.node.viewmodel.LogLevel.INFO)
+            } catch (_: Throwable) {}
             val startResult = runBlocking(ioDispatcher) {
                 controller.start(targetConfig)
             }
             if (startResult.isFailure) {
+                val err = startResult.exceptionOrNull()
+                val errorMsg = err?.message ?: "Unknown child process failure"
                 try {
-                    Log.e(TAG, "Failed to start child process: ${startResult.exceptionOrNull()?.message}")
+                    Log.e(TAG, "Failed to start child process: $errorMsg", err)
                 } catch (ignored: Throwable) {}
+                try {
+                    logStreamer?.append("Error: Sub-process execution failed: $errorMsg", com.hermes.node.viewmodel.LogLevel.ERROR)
+                } catch (_: Throwable) {}
                 try {
                     if (wakeLockManager?.isHeld == true) {
                         wakeLockManager?.release()
                     }
                 } catch (ignored: Throwable) {}
+                _lastErrorMessage.value = errorMsg
                 _isRunning.value = false
                 _processState.value = ProcessState.ERROR
                 try {
@@ -298,6 +328,7 @@ open class HermesServerService : Service() {
                 _processState.value = ProcessState.RUNNING
                 try {
                     logStreamer?.start(controller.stdout, controller.stderr)
+                    logStreamer?.append("Daemon process started successfully (PID: ${controller.pid ?: "N/A"})", com.hermes.node.viewmodel.LogLevel.INFO)
                 } catch (ignored: Throwable) {}
             }
         }
@@ -306,12 +337,44 @@ open class HermesServerService : Service() {
         try {
             Log.i(TAG, "HermesServerService started in foreground")
         } catch (ignored: Throwable) {}
+
+        // Connect Telegram Gateway if enabled in configuration
+        val hermesConfig = try {
+            val configFile = File(safeFilesDir, "hermes.json")
+            com.hermes.node.data.ConfigSerializer(configFile).deserialize().getOrNull()
+        } catch (_: Throwable) { null }
+
+        if (hermesConfig?.gateway?.telegram?.enabled == true && hermesConfig.gateway.telegram.botToken.isNotBlank()) {
+            val tgManager = ensureTelegramGatewayManager()
+            serviceScope.launch(ioDispatcher) {
+                try {
+                    logStreamer?.append("Telegram Gateway: connecting to Telegram Bot API...", com.hermes.node.viewmodel.LogLevel.INFO)
+                    val authResult = tgManager.start(
+                        botToken = hermesConfig.gateway.telegram.botToken,
+                        adminUserIds = hermesConfig.gateway.telegram.adminUserIds,
+                        hermesConfig = hermesConfig,
+                        logStreamer = logStreamer
+                    )
+                    if (authResult.isSuccess) {
+                        logStreamer?.append("Telegram Gateway active: @${authResult.getOrNull()} is online and listening for messages.", com.hermes.node.viewmodel.LogLevel.INFO)
+                    }
+                } catch (e: Exception) {
+                    logStreamer?.append("Telegram Gateway connection error: ${e.message}", com.hermes.node.viewmodel.LogLevel.WARN)
+                }
+            }
+        }
+
         return true
     }
 
     fun stopForegroundServiceInternal(): ProcessStopResult {
         try {
             stopTunnelBlocking()
+        } catch (_: Throwable) {}
+        try {
+            serviceScope.launch(ioDispatcher) {
+                try { telegramGatewayManager?.stop() } catch (_: Throwable) {}
+            }
         } catch (_: Throwable) {}
         val stopResult = processController?.let { controller ->
             runBlocking(ioDispatcher) {
@@ -375,6 +438,9 @@ open class HermesServerService : Service() {
         private val _processState = MutableStateFlow(com.hermes.node.engine.ProcessState.STOPPED)
         val processState: StateFlow<com.hermes.node.engine.ProcessState> = _processState.asStateFlow()
 
+        private val _lastErrorMessage = MutableStateFlow<String?>(null)
+        val lastErrorMessage: StateFlow<String?> = _lastErrorMessage.asStateFlow()
+
         fun start(context: Context): Boolean {
             val intent = Intent(context, HermesServerService::class.java).apply {
                 action = ACTION_START
@@ -415,6 +481,10 @@ open class HermesServerService : Service() {
 
         internal fun setProcessStateForTest(state: com.hermes.node.engine.ProcessState) {
             _processState.value = state
+        }
+
+        internal fun setLastErrorMessageForTest(msg: String?) {
+            _lastErrorMessage.value = msg
         }
     }
 }

@@ -38,6 +38,7 @@ import com.hermes.node.engine.BootstrapExtractor
 import com.hermes.node.engine.MemoryManager
 import com.hermes.node.engine.SystemTelemetryCollector
 import com.hermes.node.service.HermesServerService
+import java.io.File
 
 @Composable
 fun HermesApp(
@@ -50,7 +51,7 @@ fun HermesApp(
                 val appCtx = context.applicationContext
                 val extractor = BootstrapExtractor(appCtx)
                 val configRepository = EncryptedConfigRepository.create(appCtx)
-                val configSerializer = ConfigSerializer(appCtx.filesDir)
+                val configSerializer = ConfigSerializer(File(appCtx.filesDir, "hermes.json"))
                 val telemetryCollector = SystemTelemetryCollector(appCtx)
                 val memoryManager = MemoryManager(appCtx)
                 return ServerViewModel(

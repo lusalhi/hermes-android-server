@@ -301,4 +301,75 @@ class MemoryManagerTest {
         val bytes = defaultManager.calculateStorageUsage()
         assertTrue(bytes >= 0L)
     }
+
+    @Test
+    fun exportMemoryBackup_purgesStaleShareArchivesBeforeStaging() {
+        val backupsDir = File(tempCacheDir, "backups")
+        backupsDir.mkdirs()
+        val staleArchive = File(backupsDir, "hermes-backup-20200101-000000.zip")
+        staleArchive.writeText("stale-archive")
+
+        val agentDataDir = File(tempFilesDir, "agent_data")
+        agentDataDir.mkdirs()
+        File(agentDataDir, "purge.db").writeText("purge-test-data")
+
+        val result = memoryManager.exportMemoryBackup()
+
+        assertTrue(result.isSuccess)
+        assertFalse("Stale archive should have been purged", staleArchive.exists())
+        val remaining = backupsDir.listFiles() ?: emptyArray()
+        assertTrue("New archive should be staged", remaining.isNotEmpty())
+        remaining.forEach { assertTrue(it.name.endsWith(".zip")) }
+    }
+
+    @Test
+    fun exportMemoryBackup_writesAtomically_leavesNoTempResidue() {
+        val agentDataDir = File(tempFilesDir, "agent_data")
+        agentDataDir.mkdirs()
+        File(agentDataDir, "atomic.db").writeText("atomic-write-data")
+
+        val result = memoryManager.exportMemoryBackup()
+
+        assertTrue(result.isSuccess)
+        val archive = result.getOrThrow()
+        assertTrue(archive.exists())
+        val parentFiles = archive.parentFile?.listFiles() ?: emptyArray()
+        assertTrue(
+            "Unexpected temp residue: ${parentFiles.map { it.name }}",
+            parentFiles.none { it.name.endsWith(".tmp") }
+        )
+        ZipFile(archive).use { zip ->
+            assertNotNull(zip.getEntry("agent_data/atomic.db"))
+        }
+    }
+
+    @Test
+    fun exportToDownloads_reportsActualExportDestinationInMessage() {
+        val agentDataDir = File(tempFilesDir, "agent_data")
+        agentDataDir.mkdirs()
+        File(agentDataDir, "message.db").writeText("message-test-data")
+
+        val result = memoryManager.exportToDownloads()
+
+        assertTrue(result.isSuccess)
+        val message = result.getOrThrow()
+        val downloadsDir = File(tempFilesDir.parentFile ?: tempFilesDir, "Downloads/HermesNode")
+        assertTrue(
+            "Message should contain the actual destination path: $message",
+            message.contains(downloadsDir.path)
+        )
+    }
+
+    @Test
+    fun getShareIntent_withoutContext_returnsFailureWithoutStagingArchive() {
+        val result = memoryManager.getShareIntent()
+
+        assertFalse(result.isSuccess)
+        assertNotNull(result.exceptionOrNull())
+        val backupsDir = File(tempCacheDir, "backups")
+        if (backupsDir.exists()) {
+            val staged = backupsDir.listFiles() ?: emptyArray()
+            assertTrue("No archive should be staged when context is missing", staged.isEmpty())
+        }
+    }
 }

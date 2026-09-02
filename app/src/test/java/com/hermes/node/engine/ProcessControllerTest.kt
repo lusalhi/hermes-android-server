@@ -248,6 +248,45 @@ class ProcessControllerTest {
         assertEquals(listOf("echo", "hello", "world"), config.fullCommand)
     }
 
+    @Test
+    fun start_whenProcessRunnerFails_setsLastErrorMessageWithDiagnostics() = runTest(testDispatcher) {
+        val failingRunner = object : ProcessRunner {
+            override fun run(config: ProcessConfig): Process {
+                throw java.io.IOException("Cannot run program \"${config.executable}\": error=2, No such file or directory")
+            }
+        }
+        val controller = ProcessController(processRunner = failingRunner, ioDispatcher = testDispatcher)
+        val config = ProcessConfig(executable = "/non/existent/path/python3")
+
+        val result = controller.start(config)
+
+        assertTrue(result.isFailure)
+        assertEquals(ProcessState.ERROR, controller.state.value)
+        assertNotNull(controller.lastErrorMessage)
+        assertTrue(controller.lastErrorMessage?.contains("Failed to launch '/non/existent/path/python3'") == true)
+        assertTrue(controller.lastErrorMessage?.contains("file exists=false") == true)
+    }
+
+    @Test
+    fun resolveExecutableCommand_whenScriptHasShebang_handlesCommandResolution() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "script_test_${System.currentTimeMillis()}").apply { mkdirs() }
+        val script = File(tempDir, "mock_script.sh").apply {
+            writeText("#!/non/existent/interpreter/sh\necho test\n")
+            setExecutable(true)
+        }
+
+        val config = ProcessConfig(
+            executable = script.absolutePath,
+            arguments = listOf("arg1", "arg2")
+        )
+
+        val resolved = DefaultProcessRunner.resolveExecutableCommand(config)
+        assertNotNull(resolved)
+        assertTrue(resolved.isNotEmpty())
+
+        tempDir.deleteRecursively()
+    }
+
     private class FakeProcessRunner(private val process: Process) : ProcessRunner {
         var lastExecutedConfig: ProcessConfig? = null
 

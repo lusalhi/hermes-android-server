@@ -38,6 +38,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -1172,7 +1173,14 @@ class ServerViewModel(
                     ProcessState.ERROR -> {
                         val currentStatus = _uiState.value.status
                         if (currentStatus == ServerStatus.STARTING || currentStatus == ServerStatus.RUNNING) {
-                            onSetError("Sub-process execution failed.")
+                            val detail = processController?.lastErrorMessage
+                                ?: HermesServerService.lastErrorMessage.value
+                            val fullErrMsg = if (!detail.isNullOrBlank()) {
+                                "Sub-process execution failed: $detail"
+                            } else {
+                                "Sub-process execution failed."
+                            }
+                            onSetError(fullErrMsg)
                         }
                     }
                     else -> {}
@@ -1283,13 +1291,26 @@ class ServerViewModel(
     fun refreshStorageUsage() {
         val manager = effectiveMemoryManager ?: return
         viewModelScope.launch(ioDispatcher) {
-            val bytes = manager.calculateStorageUsage()
-            val formatted = manager.formatStorageSize(bytes)
-            _uiState.update {
-                it.copy(
-                    storageSizeBytes = bytes,
-                    storageSizeFormatted = formatted
-                )
+            try {
+                val bytes = manager.calculateStorageUsage()
+                val formatted = manager.formatStorageSize(bytes)
+                _uiState.update {
+                    it.copy(
+                        storageSizeBytes = bytes,
+                        storageSizeFormatted = formatted
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val errorMsg = e.message ?: e.javaClass.simpleName
+                _uiState.update {
+                    it.copy(
+                        isMemoryActionSuccess = false,
+                        memoryActionMessage = "Storage check failed: $errorMsg"
+                    )
+                }
+                onAddLog("Storage usage check error: $errorMsg", LogLevel.ERROR)
             }
         }
     }
@@ -1316,8 +1337,12 @@ class ServerViewModel(
             )
         }
         onAddLog("Starting episodic memory export to Downloads...", LogLevel.INFO)
+        if (_uiState.value.status == ServerStatus.RUNNING) {
+            onAddLog("Warning: Server is RUNNING — backup may be less consistent until the daemon is stopped.", LogLevel.WARN)
+        }
 
         memoryJob = viewModelScope.launch(ioDispatcher) {
+            val job = coroutineContext[Job]
             try {
                 val result = manager.exportToDownloads()
                 if (result.isSuccess) {
@@ -1340,8 +1365,21 @@ class ServerViewModel(
                     onAddLog("Export to Downloads error: $errorMsg", LogLevel.ERROR)
                 }
                 refreshStorageUsage()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val errorMsg = e.message ?: e.javaClass.simpleName
+                _uiState.update {
+                    it.copy(
+                        isMemoryActionSuccess = false,
+                        memoryActionMessage = "Export failed: $errorMsg"
+                    )
+                }
+                onAddLog("Export to Downloads error: $errorMsg", LogLevel.ERROR)
             } finally {
-                _uiState.update { it.copy(isExportingMemory = false) }
+                if (job === memoryJob) {
+                    _uiState.update { it.copy(isExportingMemory = false) }
+                }
             }
         }
     }
@@ -1368,8 +1406,12 @@ class ServerViewModel(
             )
         }
         onAddLog("Preparing episodic memory backup archive for sharing...", LogLevel.INFO)
+        if (_uiState.value.status == ServerStatus.RUNNING) {
+            onAddLog("Warning: Server is RUNNING — backup may be less consistent until the daemon is stopped.", LogLevel.WARN)
+        }
 
         memoryJob = viewModelScope.launch(ioDispatcher) {
+            val job = coroutineContext[Job]
             try {
                 val result = manager.getShareIntent()
                 if (result.isSuccess) {
@@ -1411,8 +1453,21 @@ class ServerViewModel(
                     }
                     onAddLog("Memory share error: $errorMsg", LogLevel.ERROR)
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val errorMsg = e.message ?: e.javaClass.simpleName
+                _uiState.update {
+                    it.copy(
+                        isMemoryActionSuccess = false,
+                        memoryActionMessage = "Share failed: $errorMsg"
+                    )
+                }
+                onAddLog("Memory share error: $errorMsg", LogLevel.ERROR)
             } finally {
-                _uiState.update { it.copy(isExportingMemory = false) }
+                if (job === memoryJob) {
+                    _uiState.update { it.copy(isExportingMemory = false) }
+                }
             }
         }
     }
@@ -1455,6 +1510,7 @@ class ServerViewModel(
         onAddLog("Starting factory reset of episodic memory...", LogLevel.INFO)
 
         memoryJob = viewModelScope.launch(ioDispatcher) {
+            val job = coroutineContext[Job]
             try {
                 val result = manager.clearEpisodicMemory()
                 if (result.isSuccess) {
@@ -1480,8 +1536,21 @@ class ServerViewModel(
                     onAddLog("Episodic memory wipe error: $errorMsg", LogLevel.ERROR)
                     refreshStorageUsage()
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val errorMsg = e.message ?: e.javaClass.simpleName
+                _uiState.update {
+                    it.copy(
+                        isMemoryActionSuccess = false,
+                        memoryActionMessage = "Wipe failed: $errorMsg"
+                    )
+                }
+                onAddLog("Episodic memory wipe error: $errorMsg", LogLevel.ERROR)
             } finally {
-                _uiState.update { it.copy(isResettingMemory = false) }
+                if (job === memoryJob) {
+                    _uiState.update { it.copy(isResettingMemory = false) }
+                }
             }
         }
     }

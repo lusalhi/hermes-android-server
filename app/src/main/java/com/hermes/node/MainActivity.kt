@@ -15,6 +15,7 @@ import com.hermes.node.service.HermesServerService
 import com.hermes.node.ui.navigation.HermesApp
 import com.hermes.node.ui.theme.HermesTheme
 import com.hermes.node.viewmodel.ServerViewModel
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -25,7 +26,7 @@ class MainActivity : ComponentActivity() {
                 val appCtx = applicationContext
                 val extractor = BootstrapExtractor(appCtx)
                 val configRepository = EncryptedConfigRepository.create(appCtx)
-                val configSerializer = ConfigSerializer(appCtx.filesDir)
+                val configSerializer = ConfigSerializer(File(appCtx.filesDir, "hermes.json"))
                 val telemetryCollector = SystemTelemetryCollector(appCtx)
                 return ServerViewModel(
                     context = appCtx,

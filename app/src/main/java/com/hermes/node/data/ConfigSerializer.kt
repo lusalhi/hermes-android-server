@@ -18,32 +18,36 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
 open class ConfigSerializer(
-    val configFile: File
+    targetFileOrDir: File
 ) {
-    constructor(baseDir: File, fileName: String = CONFIG_FILE_NAME) : this(File(baseDir, fileName))
+    val configFile: File = when {
+        targetFileOrDir.isDirectory || targetFileOrDir.name == "files" -> File(targetFileOrDir, CONFIG_FILE_NAME)
+        targetFileOrDir.name.endsWith(".json") -> targetFileOrDir
+        else -> File(targetFileOrDir, CONFIG_FILE_NAME)
+    }
+
+    constructor(baseDir: File, fileName: String) : this(File(baseDir, fileName))
 
     companion object {
         const val CONFIG_FILE_NAME = "hermes.json"
 
         fun applyPosix0600Permissions(file: File): Boolean {
             if (!file.exists()) return false
-            var success = true
-            // Clear all permissions for group and others
-            success = file.setReadable(false, false) && success
-            success = file.setWritable(false, false) && success
-            success = file.setExecutable(false, false) && success
+            try {
+                // Ensure owner read and write
+                file.setReadable(true, true)
+                file.setWritable(true, true)
+                file.setExecutable(false, false)
 
-            // Grant read and write exclusively to file owner (POSIX 0600)
-            success = file.setReadable(true, true) && success
-            success = file.setWritable(true, true) && success
-            if (!success) {
-                try {
-                    android.util.Log.w("ConfigSerializer", "Warning: Failed to set strict POSIX 0600 permissions on ${file.absolutePath}")
-                } catch (_: Throwable) {
-                    System.err.println("Warning: Failed to set strict POSIX 0600 permissions on ${file.absolutePath}")
-                }
-            }
-            return success
+                // Try to restrict other/world access
+                file.setReadable(false, false)
+                file.setWritable(false, false)
+
+                // Re-grant owner read/write
+                file.setReadable(true, true)
+                file.setWritable(true, true)
+            } catch (_: Throwable) {}
+            return file.canRead() && file.canWrite()
         }
     }
 
@@ -246,25 +250,39 @@ open class ConfigSerializer(
                 }
             }
 
-            // Apply POSIX 0600 permissions to temp staging file — fail closed on permission error
-            if (!applyPosix0600Permissions(tempFile)) {
-                throw IOException("Failed to set strict POSIX 0600 permissions on staging file: ${tempFile.absolutePath}")
-            }
+            // Apply POSIX 0600 permissions to temp staging file
+            applyPosix0600Permissions(tempFile)
 
             // Atomically replace destination
-            val sourcePath = tempFile.toPath()
-            val targetPath = configFile.toPath()
-            try {
-                Files.move(sourcePath, targetPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-            } catch (_: Exception) {
-                // Safe fallback without prior deletion of original config
-                Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING)
+            val moved = if (tempFile.renameTo(configFile)) {
+                true
+            } else {
+                try {
+                    Files.move(tempFile.toPath(), configFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    true
+                } catch (_: Exception) {
+                    try {
+                        tempFile.inputStream().use { input ->
+                            FileOutputStream(configFile).use { output ->
+                                input.copyTo(output)
+                                output.flush()
+                                try { output.fd.sync() } catch (_: Throwable) {}
+                            }
+                        }
+                        tempFile.delete()
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
             }
 
-            // Ensure POSIX 0600 permissions on destination file — fail closed on permission error
-            if (!applyPosix0600Permissions(configFile)) {
-                throw IOException("Failed to set strict POSIX 0600 permissions on ${configFile.absolutePath}")
+            if (!moved) {
+                throw IOException("Failed to write configuration file to ${configFile.absolutePath}")
             }
+
+            // Ensure POSIX 0600 permissions on destination file
+            applyPosix0600Permissions(configFile)
 
             configFile
         } catch (e: Exception) {

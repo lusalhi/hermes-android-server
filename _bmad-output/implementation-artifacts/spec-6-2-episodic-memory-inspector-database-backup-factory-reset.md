@@ -84,6 +84,23 @@ context:
 - Given the Memory Management section, when the user taps "Clear Memory", then an explicit confirmation dialog appears warning that memories will be wiped while settings are preserved.
 - Given the confirmation dialog, when the user confirms "Wipe Memory", then episodic SQLite database files and checkpoints are deleted, `hermes.json`, Keystore credentials, and `usr/` binaries remain intact, and storage size resets to `0 B`.
 
+### Review Findings
+
+_Patch:_
+
+- [x] [Review][Patch] Add running-daemon backup consistency warning — when `status == RUNNING`, show a notice that the backup may be less consistent while the server runs (resolved decision: warn-only) [SettingsScreen.kt, ServerViewModel.kt] — severity: medium
+- [x] [Review][Patch] API 28 export broken: `WRITE_EXTERNAL_STORAGE` declared but never requested at runtime — public Downloads write fails on min SDK [AndroidManifest.xml:11, MemoryManager.kt:277-291] — severity: high
+- [x] [Review][Patch] MediaStore `IS_PENDING` finalization result ignored — stuck pending row while reporting success [MemoryManager.kt:267-269] — severity: medium
+- [x] [Review][Patch] Shared backup archives never purged from `cacheDir/backups` — sensitive conversation data accumulates indefinitely [MemoryManager.kt:307-335] — severity: medium
+- [x] [Review][Patch] No API 29+ MediaStore or FileProvider share-contract test coverage — only filesystem fallback and fake-manager paths tested [MemoryManagerTest.kt:243-268] — severity: medium
+- [x] [Review][Patch] No executable UI verification for memory controls and clear-dialog acceptance criterion [SettingsScreen.kt:579-771, 1653-1716] — severity: medium
+- [x] [Review][Patch] Fallback export can write app-internal `Downloads` dir while reporting public Downloads success [MemoryManager.kt:280-291] — severity: low
+- [x] [Review][Patch] Failed share-intent path leaks staged ZIP in cache [MemoryManager.kt:309-317] — severity: low
+- [x] [Review][Patch] Backup ZIP written non-atomically to final path [MemoryManager.kt:169-184] — severity: low
+- [x] [Review][Patch] Memory ViewModel operations lack catch-all — a thrown implementation exception crashes the app with no error UI [ServerViewModel.kt:1283-1484] — severity: low
+- [x] [Review][Patch] Cancelled memory job's `finally` clears the newer operation's progress flags [ServerViewModel.kt:1311-1367] — severity: low
+- [x] [Review][Patch] ViewModel tests lack exception/overlap/cancellation coverage for memory ops [ServerViewModelTest.kt:2204-2518] — severity: low
+
 ## Spec Change Log
 
 _None._

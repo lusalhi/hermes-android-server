@@ -76,6 +76,13 @@ class HermesServerServiceTest {
         assertNotNull(service.tunnelManager)
     }
 
+    @Test
+    fun setLastErrorMessageForTest_updatesStateFlow() {
+        HermesServerService.setLastErrorMessageForTest("Custom error message")
+        assertEquals("Custom error message", HermesServerService.lastErrorMessage.value)
+        HermesServerService.setLastErrorMessageForTest(null)
+    }
+
     private class TestService(private val fake: FakeTunnelManager) : HermesServerService() {
         fun initForTest(dispatcher: kotlinx.coroutines.CoroutineDispatcher) {
             ioDispatcher = dispatcher
