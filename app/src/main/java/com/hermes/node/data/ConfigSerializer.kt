@@ -108,6 +108,7 @@ open class ConfigSerializer(
         skillsObj.put(SkillsConfig.SKILL_FILE_MANAGER, config.skills.fileManager)
         skillsObj.put(SkillsConfig.SKILL_BASH_RUNNER, config.skills.bashRunner)
         skillsObj.put(SkillsConfig.SKILL_CRON_SCHEDULER, config.skills.cronScheduler)
+        skillsObj.put(SkillsConfig.KEY_SHARED_STORAGE_ENABLED, config.skills.sharedStorageEnabled)
         for ((customId, customEnabled) in config.skills.customSkills) {
             if (customId !in SkillsConfig.CORE_SKILL_IDS && customId !in SkillsConfig.NON_SKILL_KEYS) {
                 skillsObj.put(customId, customEnabled)
@@ -201,6 +202,11 @@ open class ConfigSerializer(
                 val rawProvider = sObj.optString("search_provider", SkillsConfig.SEARCH_PROVIDER_BRAVE)
                 val searchProvider = if (rawProvider.isNotBlank()) rawProvider else SkillsConfig.SEARCH_PROVIDER_BRAVE
                 val searchApiKey = sObj.optString("search_api_key", "")
+                val sharedStorageEnabled = when {
+                    sObj.has("shared_storage_enabled") -> sObj.optBoolean("shared_storage_enabled", true)
+                    sObj.has("shared_storage") -> sObj.optBoolean("shared_storage", true)
+                    else -> true
+                }
                 SkillsConfig(
                     webSearch = sObj.optBoolean(SkillsConfig.SKILL_WEB_SEARCH, true),
                     searchProvider = searchProvider,
@@ -208,6 +214,7 @@ open class ConfigSerializer(
                     fileManager = sObj.optBoolean(SkillsConfig.SKILL_FILE_MANAGER, true),
                     bashRunner = sObj.optBoolean(SkillsConfig.SKILL_BASH_RUNNER, true),
                     cronScheduler = sObj.optBoolean(SkillsConfig.SKILL_CRON_SCHEDULER, true),
+                    sharedStorageEnabled = sharedStorageEnabled,
                     customSkills = customMap
                 )
             } else SkillsConfig()

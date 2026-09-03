@@ -173,7 +173,8 @@ fun HermesApp(
                     onShowClearMemoryDialog = viewModel::onShowClearMemoryDialog,
                     onDismissClearMemoryDialog = viewModel::onDismissClearMemoryDialog,
                     onConfirmClearMemory = viewModel::onConfirmClearMemory,
-                    onDismissMemoryActionMessage = viewModel::onDismissMemoryActionMessage
+                    onDismissMemoryActionMessage = viewModel::onDismissMemoryActionMessage,
+                    onUpdateSharedStorageEnabled = viewModel::setSharedStorageEnabled
                 )
             }
         }

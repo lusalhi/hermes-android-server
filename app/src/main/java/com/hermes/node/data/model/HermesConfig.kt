@@ -74,9 +74,13 @@ data class SkillsConfig(
     val fileManager: Boolean = true,
     val bashRunner: Boolean = true,
     val cronScheduler: Boolean = true,
+    val sharedStorageEnabled: Boolean = true,
     val customSkills: Map<String, Boolean> = emptyMap()
 ) {
+    fun withSharedStorageEnabled(enabled: Boolean): SkillsConfig = copy(sharedStorageEnabled = enabled)
+
     fun isSkillEnabled(skillId: String): Boolean = when {
+        skillId == SKILL_SHARED_STORAGE || skillId == KEY_SHARED_STORAGE_ENABLED -> sharedStorageEnabled
         skillId in NON_SKILL_KEYS -> false
         skillId == SKILL_WEB_SEARCH -> webSearch
         skillId == SKILL_FILE_MANAGER -> fileManager
@@ -86,6 +90,7 @@ data class SkillsConfig(
     }
 
     fun withSkillToggled(skillId: String, enabled: Boolean): SkillsConfig = when {
+        skillId == SKILL_SHARED_STORAGE || skillId == KEY_SHARED_STORAGE_ENABLED -> copy(sharedStorageEnabled = enabled)
         skillId in NON_SKILL_KEYS -> this
         skillId == SKILL_WEB_SEARCH -> copy(webSearch = enabled)
         skillId == SKILL_FILE_MANAGER -> copy(fileManager = enabled)
@@ -120,6 +125,8 @@ data class SkillsConfig(
         const val SKILL_FILE_MANAGER = "file_manager"
         const val SKILL_BASH_RUNNER = "bash_runner"
         const val SKILL_CRON_SCHEDULER = "cron_scheduler"
+        const val SKILL_SHARED_STORAGE = "shared_storage"
+        const val KEY_SHARED_STORAGE_ENABLED = "shared_storage_enabled"
 
         const val SEARCH_PROVIDER_BRAVE = "brave"
         const val SEARCH_PROVIDER_TAVILY = "tavily"
@@ -128,7 +135,9 @@ data class SkillsConfig(
 
         val NON_SKILL_KEYS = setOf(
             "search_provider",
-            "search_api_key"
+            "search_api_key",
+            KEY_SHARED_STORAGE_ENABLED,
+            SKILL_SHARED_STORAGE
         )
 
         val SUPPORTED_SEARCH_PROVIDERS = listOf(

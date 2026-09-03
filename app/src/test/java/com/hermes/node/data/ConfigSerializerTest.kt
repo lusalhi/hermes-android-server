@@ -656,4 +656,76 @@ class ConfigSerializerTest {
         assertTrue(loaded.skills.webSearch)
         assertFalse(loaded.skills.bashRunner)
     }
+
+    @Test
+    fun generateJson_withSharedStorageEnabled_serializesProperty() {
+        val configEnabled = HermesConfig(skills = SkillsConfig(sharedStorageEnabled = true))
+        val jsonEnabled = JSONObject(serializer.generateJson(configEnabled))
+        assertTrue(jsonEnabled.getJSONObject("skills").getBoolean("shared_storage_enabled"))
+
+        val configDisabled = HermesConfig(skills = SkillsConfig(sharedStorageEnabled = false))
+        val jsonDisabled = JSONObject(serializer.generateJson(configDisabled))
+        assertFalse(jsonDisabled.getJSONObject("skills").getBoolean("shared_storage_enabled"))
+    }
+
+    @Test
+    fun parseJson_withSharedStorageEnabled_deserializesCorrectly() {
+        val jsonString = """
+            {
+                "skills": {
+                    "shared_storage_enabled": false
+                }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertFalse(parsed.skills.sharedStorageEnabled)
+    }
+
+    @Test
+    fun serialize_and_deserialize_roundTripPreservesSharedStorageEnabled() {
+        val config = HermesConfig(skills = SkillsConfig(sharedStorageEnabled = false))
+        val serializeResult = serializer.serialize(config)
+        assertTrue(serializeResult.isSuccess)
+
+        val deserializeResult = serializer.deserialize()
+        assertTrue(deserializeResult.isSuccess)
+        assertFalse(deserializeResult.getOrThrow().skills.sharedStorageEnabled)
+    }
+
+    @Test
+    fun sharedStorageEnabled_notExposedInCustomSkills() {
+        val jsonString = """
+            {
+                "skills": {
+                    "shared_storage_enabled": true,
+                    "shared_storage": false,
+                    "custom_tool": true
+                }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertFalse(parsed.skills.customSkills.containsKey("shared_storage_enabled"))
+        assertFalse(parsed.skills.customSkills.containsKey("shared_storage"))
+        assertTrue(parsed.skills.customSkills.containsKey("custom_tool"))
+
+        val installedSkills = parsed.skills.toInstalledSkills()
+        assertFalse(installedSkills.any { it.id == "shared_storage_enabled" })
+        assertFalse(installedSkills.any { it.id == "shared_storage" })
+    }
+
+    @Test
+    fun parseJson_defaultsSharedStorageEnabledToTrue() {
+        val jsonString = """
+            {
+                "skills": {
+                    "web_search": true
+                }
+            }
+        """.trimIndent()
+
+        val parsed = serializer.parseJson(jsonString)
+        assertTrue(parsed.skills.sharedStorageEnabled)
+    }
 }

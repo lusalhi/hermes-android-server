@@ -516,6 +516,126 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun createHermesDaemonConfig_withSharedStorageEnabled_addsBindMounts() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_proot_storage_on_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val usrBin = File(tempDir, "usr/bin").apply { mkdirs() }
+        File(usrBin, "proot").apply { writeText("dummy"); setExecutable(true) }
+        File(usrBin, "hermes").apply { writeText("dummy"); setExecutable(true) }
+
+        val mockDownloadDir = File(tempDir, "sdcard_download").apply { mkdirs() }
+
+        val hermesConfig = HermesConfig(
+            skills = SkillsConfig(sharedStorageEnabled = true)
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig,
+            downloadDir = mockDownloadDir
+        )
+
+        val expectedSharedMount = "${File(tempDir, "shared").absolutePath}:/shared"
+        val expectedDownloadMount = "${mockDownloadDir.absolutePath}:/sdcard/Download"
+
+        assertTrue("Expected shared mount in proot arguments", config.arguments.contains(expectedSharedMount))
+        assertTrue("Expected download mount in proot arguments", config.arguments.contains(expectedDownloadMount))
+
+        // Verify bind flags (-b) precede the mounts
+        val sharedIdx = config.arguments.indexOf(expectedSharedMount)
+        assertTrue(sharedIdx > 0 && config.arguments[sharedIdx - 1] == "-b")
+
+        val downloadIdx = config.arguments.indexOf(expectedDownloadMount)
+        assertTrue(downloadIdx > 0 && config.arguments[downloadIdx - 1] == "-b")
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_withSharedStorageDisabled_omitsBindMounts() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_proot_storage_off_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val usrBin = File(tempDir, "usr/bin").apply { mkdirs() }
+        File(usrBin, "proot").apply { writeText("dummy"); setExecutable(true) }
+        File(usrBin, "hermes").apply { writeText("dummy"); setExecutable(true) }
+
+        val mockDownloadDir = File(tempDir, "sdcard_download").apply { mkdirs() }
+
+        val hermesConfig = HermesConfig(
+            skills = SkillsConfig(sharedStorageEnabled = false)
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig,
+            downloadDir = mockDownloadDir
+        )
+
+        val forbiddenShared = "${File(tempDir, "shared").absolutePath}:/shared"
+        val forbiddenDownload = "${mockDownloadDir.absolutePath}:/sdcard/Download"
+
+        assertFalse("Shared mount must not be present when disabled", config.arguments.contains(forbiddenShared))
+        assertFalse("Download mount must not be present when disabled", config.arguments.contains(forbiddenDownload))
+        assertFalse(config.arguments.any { it.contains("sdcard/Download") })
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_whenDownloadDirMissing_gracefullySkips() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_proot_storage_skip_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val usrBin = File(tempDir, "usr/bin").apply { mkdirs() }
+        File(usrBin, "proot").apply { writeText("dummy"); setExecutable(true) }
+        File(usrBin, "hermes").apply { writeText("dummy"); setExecutable(true) }
+
+        val nonExistentDownloadDir = File(tempDir, "non_existent_path")
+
+        val hermesConfig = HermesConfig(
+            skills = SkillsConfig(sharedStorageEnabled = true)
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig,
+            downloadDir = nonExistentDownloadDir
+        )
+
+        val expectedSharedMount = "${File(tempDir, "shared").absolutePath}:/shared"
+
+        assertTrue("Shared mount must be present", config.arguments.contains(expectedSharedMount))
+        assertFalse("Missing download dir must be gracefully omitted", config.arguments.any { it.contains("sdcard/Download") })
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_autoHealsMissingToolchainShims() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_autoheal_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val usrBin = File(tempDir, "usr/bin").apply { mkdirs() }
+
+        val sudoShim = File(usrBin, "sudo")
+        val aptShim = File(usrBin, "apt")
+        val aptGetShim = File(usrBin, "apt-get")
+
+        sudoShim.delete()
+        aptShim.delete()
+        aptGetShim.delete()
+        assertFalse(sudoShim.exists())
+        assertFalse(aptShim.exists())
+        assertFalse(aptGetShim.exists())
+
+        ProcessConfig.createHermesDaemonConfig(filesDir = tempDir)
+
+        assertTrue("sudo shim should be auto-healed", sudoShim.exists() && sudoShim.canExecute())
+        assertTrue("apt shim should be auto-healed", aptShim.exists() && aptShim.canExecute())
+        assertTrue("apt-get shim should be auto-healed", aptGetShim.exists() && aptGetShim.canExecute())
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
     fun extractPid_extractsPidProperly() {
         val controller = ProcessController(ioDispatcher = testDispatcher)
         val fakeProcess = FakeProcess(fakePid = 6789L)

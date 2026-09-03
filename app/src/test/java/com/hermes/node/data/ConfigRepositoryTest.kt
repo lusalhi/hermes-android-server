@@ -482,6 +482,22 @@ class ConfigRepositoryTest {
         assertEquals(SkillsConfig.SEARCH_PROVIDER_BRAVE, skills.searchProvider)
         assertEquals("", skills.searchApiKey)
     }
+
+    @Test
+    fun saveConfig_persistsSharedStorageEnabled_false() {
+        val config = HermesConfig(
+            skills = SkillsConfig(sharedStorageEnabled = false)
+        )
+        repository.saveConfig(config)
+
+        val retrievedConfig = repository.getConfig()
+        assertFalse(retrievedConfig.skills.sharedStorageEnabled)
+
+        val retrievedSkills = repository.getSkillsConfig()
+        assertFalse(retrievedSkills.sharedStorageEnabled)
+        assertFalse(repository.isSkillEnabled(SkillsConfig.KEY_SHARED_STORAGE_ENABLED))
+        assertFalse(repository.isSkillEnabled(SkillsConfig.SKILL_SHARED_STORAGE))
+    }
 }
 
 class FakeSharedPreferences : SharedPreferences {

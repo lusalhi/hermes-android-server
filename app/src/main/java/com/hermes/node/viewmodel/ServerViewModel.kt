@@ -833,6 +833,57 @@ class ServerViewModel(
         }
     }
 
+    fun setSharedStorageEnabled(enabled: Boolean) {
+        _uiState.update { current ->
+            val updatedSkills = current.skillsConfig.copy(sharedStorageEnabled = enabled)
+            current.copy(
+                skillsConfig = updatedSkills,
+                isSettingsSaved = false,
+                configSaveMessage = null
+            )
+        }
+
+        viewModelScope.launch(ioDispatcher) {
+            configMutex.withLock {
+                val currentState = _uiState.value
+                val config = buildHermesConfig(currentState)
+
+                try {
+                    if (configSerializer != null) {
+                        val result = configSerializer.serialize(config)
+                        if (result.isFailure) {
+                            val error = result.exceptionOrNull()?.message ?: "Failed to persist shared storage configuration"
+                            _uiState.update { current ->
+                                val reverted = current.skillsConfig.copy(sharedStorageEnabled = !enabled)
+                                current.copy(
+                                    skillsConfig = reverted,
+                                    configSaveMessage = "Failed to update shared storage: $error"
+                                )
+                            }
+                            onAddLog("Failed to serialize shared storage configuration: $error", LogLevel.ERROR)
+                            return@launch
+                        }
+                    }
+                    configRepository?.saveSkillsConfig(config.skills)
+                    onAddLog("Device shared storage ${if (enabled) "enabled" else "disabled"}. hermes.json updated.", LogLevel.INFO)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    val error = e.message ?: "Unknown error saving shared storage configuration"
+                    _uiState.update { current ->
+                        val reverted = current.skillsConfig.copy(sharedStorageEnabled = !enabled)
+                        current.copy(
+                            skillsConfig = reverted,
+                            configSaveMessage = "Failed to update shared storage: $error"
+                        )
+                    }
+                    onAddLog("Failed to update shared storage: $error", LogLevel.ERROR)
+                }
+            }
+        }
+    }
+
+    fun onUpdateSharedStorageEnabled(enabled: Boolean) = setSharedStorageEnabled(enabled)
+
     fun onUpdateProvider(provider: String) {
         _uiState.update { it.copy(selectedProvider = provider, isSettingsSaved = false, configSaveMessage = null) }
     }

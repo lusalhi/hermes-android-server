@@ -528,4 +528,124 @@ class BootstrapExtractorTest {
         assertTrue("User file must remain intact", userFile.exists())
         assertEquals("keep me", userFile.readText())
     }
+
+    @Test
+    fun ensureToolchainShims_createsExecutableShims() {
+        val created = extractor.ensureToolchainShims()
+        assertTrue(created)
+
+        val sudo = File(extractor.usrDir, "bin/sudo")
+        val apt = File(extractor.usrDir, "bin/apt")
+        val aptGet = File(extractor.usrDir, "bin/apt-get")
+
+        assertTrue(sudo.exists() && sudo.isFile)
+        assertTrue(apt.exists() && apt.isFile)
+        assertTrue(aptGet.exists() && aptGet.isFile)
+
+        assertTrue(sudo.canExecute())
+        assertTrue(apt.canExecute())
+        assertTrue(aptGet.canExecute())
+
+        // Verify mirror in usr/usr/bin
+        assertTrue(File(extractor.usrDir, "usr/bin/sudo").canExecute())
+        assertTrue(File(extractor.usrDir, "usr/bin/apt").canExecute())
+        assertTrue(File(extractor.usrDir, "usr/bin/apt-get").canExecute())
+    }
+
+    @Test
+    fun ensureToolchainShims_shimsAreFunctional() {
+        extractor.ensureToolchainShims()
+
+        val sudo = File(extractor.usrDir, "bin/sudo")
+        val apt = File(extractor.usrDir, "bin/apt")
+        val aptGet = File(extractor.usrDir, "bin/apt-get")
+
+        // 1. Test sudo transparent execution
+        val sudoProcess = ProcessBuilder(sudo.absolutePath, "echo", "shim_sudo_ok").start()
+        val sudoOutput = sudoProcess.inputStream.bufferedReader().readText().trim()
+        val sudoExit = sudoProcess.waitFor()
+        assertEquals(0, sudoExit)
+        assertEquals("shim_sudo_ok", sudoOutput)
+
+        // 2. Test apt update
+        val aptProcess = ProcessBuilder(apt.absolutePath, "update").start()
+        val aptOutput = aptProcess.inputStream.bufferedReader().readText().trim()
+        val aptExit = aptProcess.waitFor()
+        assertEquals(0, aptExit)
+        assertTrue(aptOutput.contains("Reading package lists... Done"))
+
+        // 3. Test apt-get update
+        val aptGetProcess = ProcessBuilder(aptGet.absolutePath, "update").start()
+        val aptGetOutput = aptGetProcess.inputStream.bufferedReader().readText().trim()
+        val aptGetExit = aptGetProcess.waitFor()
+        assertEquals(0, aptGetExit)
+        assertTrue(aptGetOutput.contains("Reading package lists... Done"))
+
+        // 4. Test apt install intercepted notification
+        val installProcess = ProcessBuilder(apt.absolutePath, "install", "-y", "jq", "ffmpeg").start()
+        val installOutput = installProcess.inputStream.bufferedReader().readText().trim()
+        val installExit = installProcess.waitFor()
+        assertEquals(0, installExit)
+        assertTrue(installOutput.contains("Hermes Shim: Package installation requested for: -y jq ffmpeg"))
+
+        // 5. Test sudo with options before command
+        val sudoFlagsProcess = ProcessBuilder(sudo.absolutePath, "-E", "echo", "shim_sudo_flags_ok").start()
+        val sudoFlagsOutput = sudoFlagsProcess.inputStream.bufferedReader().readText().trim()
+        val sudoFlagsExit = sudoFlagsProcess.waitFor()
+        assertEquals(0, sudoFlagsExit)
+        assertEquals("shim_sudo_flags_ok", sudoFlagsOutput)
+
+        // 6. Test apt-get with option before subcommand
+        val aptGetPrecedingFlagsProcess = ProcessBuilder(aptGet.absolutePath, "-y", "install", "curl").start()
+        val aptGetPrecedingFlagsOutput = aptGetPrecedingFlagsProcess.inputStream.bufferedReader().readText().trim()
+        val aptGetPrecedingFlagsExit = aptGetPrecedingFlagsProcess.waitFor()
+        assertEquals(0, aptGetPrecedingFlagsExit)
+        assertTrue(aptGetPrecedingFlagsOutput.contains("Hermes Shim: Package installation requested for: curl"))
+    }
+
+    @Test
+    fun checkHealth_autoHealsMissingShims() {
+        val usrDir = File(tempDir, "usr/bin").apply { mkdirs() }
+        File(usrDir, "python3").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "proot").apply { writeText("dummy"); setExecutable(true) }
+        File(usrDir, "hermes").apply { writeText("dummy"); setExecutable(true) }
+
+        val marker = File(tempDir, BootstrapExtractor.MARKER_FILE_NAME)
+        marker.writeText("version=${BootstrapExtractor.BOOTSTRAP_VERSION}\ntimestamp=123456\n")
+
+        // Intentionally delete shims
+        File(usrDir, "sudo").delete()
+        File(usrDir, "apt").delete()
+        File(usrDir, "apt-get").delete()
+
+        assertFalse(File(usrDir, "sudo").exists())
+        assertFalse(File(usrDir, "apt").exists())
+
+        val health = extractor.checkHealth()
+        assertTrue("Health check must succeed and auto-heal missing shims", health is HealthCheckResult.Healthy)
+
+        assertTrue(File(usrDir, "sudo").exists())
+        assertTrue(File(usrDir, "sudo").canExecute())
+        assertTrue(File(usrDir, "apt").exists())
+        assertTrue(File(usrDir, "apt").canExecute())
+        assertTrue(File(usrDir, "apt-get").exists())
+        assertTrue(File(usrDir, "apt-get").canExecute())
+    }
+
+    @Test
+    fun extractFromStream_generatesToolchainShims() = runTest(testDispatcher) {
+        val tarBytes = createTestTarXz(getStandardArchiveEntries())
+        val inStream = ByteArrayInputStream(tarBytes)
+
+        val result = extractor.extractFromStream(inStream)
+        assertTrue(result is ExtractionResult.Success)
+
+        val sudo = File(tempDir, "usr/bin/sudo")
+        val apt = File(tempDir, "usr/bin/apt")
+        val aptGet = File(tempDir, "usr/bin/apt-get")
+
+        assertTrue(sudo.exists() && sudo.canExecute())
+        assertTrue(apt.exists() && apt.canExecute())
+        assertTrue(aptGet.exists() && aptGet.canExecute())
+    }
 }

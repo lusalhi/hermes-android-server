@@ -2373,6 +2373,65 @@ class ServerViewModelTest {
     }
 
     @Test
+    fun setSharedStorageEnabled_updatesUiState_andPersistsToDiskAndRepo() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_vm_shared_storage_${System.currentTimeMillis()}").apply { mkdirs() }
+        val configFile = File(tempDir, "hermes.json")
+        val serializer = ConfigSerializer(configFile)
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = serializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertTrue(vm.uiState.value.skillsConfig.sharedStorageEnabled)
+
+        vm.setSharedStorageEnabled(false)
+        testScheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.skillsConfig.sharedStorageEnabled)
+        assertFalse(repository.getSkillsConfig().sharedStorageEnabled)
+
+        val deserialized = serializer.deserialize().getOrThrow()
+        assertFalse(deserialized.skills.sharedStorageEnabled)
+
+        tempDir.deleteRecursively()
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun setSharedStorageEnabled_revertsOnError() = runTest(testDispatcher) {
+        val fakePrefs = FakeSharedPreferences()
+        val repository = EncryptedConfigRepository(fakePrefs)
+        val brokenSerializer = object : ConfigSerializer(File("/dev/null")) {
+            override fun serialize(config: HermesConfig): Result<File> {
+                return Result.failure(java.io.IOException("Disk full error"))
+            }
+        }
+
+        val vm = ServerViewModel(
+            configRepository = repository,
+            configSerializer = brokenSerializer,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertTrue(vm.uiState.value.skillsConfig.sharedStorageEnabled)
+
+        vm.setSharedStorageEnabled(false)
+        testScheduler.advanceUntilIdle()
+
+        // State must be reverted back to true
+        assertTrue(vm.uiState.value.skillsConfig.sharedStorageEnabled)
+        assertTrue(vm.uiState.value.configSaveMessage?.contains("Disk full error") == true)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
     fun init_withMemoryManager_refreshesStorageUsage() = runTest(testDispatcher) {
         val fakeMemory = FakeMemoryManager(storageBytes = 4404019L, formattedSize = "4.2 MB")
         val vm = ServerViewModel(

@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-24-2026 16:14
-last_updated: 09-01-2026 10:35
+last_updated: 09-03-2026 19:00
 project: hermes-android-server
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
@@ -66,7 +66,8 @@ development_status:
   epic-6: in-progress
   6-1-skill-manifest-viewer-tool-enablement-toggles: done
   6-2-episodic-memory-inspector-database-backup-factory-reset: done
-  6-3-search-api-key-configuration-for-web-search: review
+  6-3-search-api-key-configuration-for-web-search: done
+  6-4-agent-toolchain-shims-and-storage-bridge: review
   epic-6-retrospective: optional
 action_items:
   - id: "epic-2-retro-item-1-in-epic-3-decouple-sub-process-lifecycle"

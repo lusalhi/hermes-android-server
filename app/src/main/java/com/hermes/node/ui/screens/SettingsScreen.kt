@@ -145,6 +145,7 @@ fun SettingsScreen(
     onDismissClearMemoryDialog: () -> Unit = {},
     onConfirmClearMemory: () -> Unit = {},
     onDismissMemoryActionMessage: () -> Unit = {},
+    onUpdateSharedStorageEnabled: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -730,6 +731,78 @@ fun SettingsScreen(
                         }
                     }
                 }
+            }
+        }
+
+        // Device Shared Storage Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(
+                                color = if (state.skillsConfig.sharedStorageEnabled) HermesCyan.copy(alpha = 0.15f) else DarkBorder.copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = if (state.skillsConfig.sharedStorageEnabled) HermesCyan.copy(alpha = 0.5f) else DarkBorder,
+                                shape = RoundedCornerShape(8.dp)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FolderOpen,
+                            contentDescription = "Device Shared Storage",
+                            tint = if (state.skillsConfig.sharedStorageEnabled) HermesCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Device Shared Storage",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Bind-mount device shared storage (/shared, /sdcard/Download) into PRoot sandbox",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Switch(
+                    checked = state.skillsConfig.sharedStorageEnabled,
+                    onCheckedChange = { enabled ->
+                        onUpdateSharedStorageEnabled(enabled)
+                    },
+                    modifier = Modifier.semantics {
+                        contentDescription = "Toggle Device Shared Storage"
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = HermesCyan
+                    )
+                )
             }
         }
 

@@ -45,3 +45,10 @@
   evidence: Custom skills are currently deserialized and supported from hermes.json, but cannot be authored or uninstalled directly from the mobile Settings interface.
 
 
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-4-agent-toolchain-shims-and-storage-bridge.md`
+  summary: Add extended query shims for apt-cache and dpkg in PRoot userland
+  evidence: Surfaced by Blind Hunter during review of Story 6.4; out of scope for MVP apt/sudo shims.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-4-agent-toolchain-shims-and-storage-bridge.md`
+  summary: Display runtime restart prompt when changing shared storage setting while daemon is active
+  evidence: PRoot bind mounts require daemon restart; surfaced during review of Story 6.4.

@@ -2,6 +2,7 @@ package com.hermes.node.engine
 
 import android.content.Context
 import android.content.res.AssetManager
+import android.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -57,6 +58,86 @@ open class BootstrapExtractor(
             "bin/proot",
             "bin/hermes"
         )
+
+        val SUDO_SHIM_SCRIPT = """#!/bin/sh
+# /usr/bin/sudo
+while [ ${'$'}# -gt 0 ]; do
+  case "${'$'}1" in
+    --)
+      shift
+      break
+      ;;
+    -u|-g|-p|-C|-U)
+      shift 2
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+if [ ${'$'}# -eq 0 ]; then
+  exit 0
+fi
+exec "${'$'}@"
+"""
+
+        val APT_SHIM_SCRIPT = """#!/bin/sh
+# /usr/bin/apt and /usr/bin/apt-get
+while [ ${'$'}# -gt 0 ]; do
+  case "${'$'}1" in
+    -*)
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+SUBCMD="${'$'}1"
+if [ -n "${'$'}1" ]; then
+  shift
+fi
+
+if [ "${'$'}SUBCMD" = "update" ]; then
+  echo "Reading package lists... Done"
+  if command -v pkg >/dev/null 2>&1; then
+    exec pkg update -y "${'$'}@"
+  elif command -v apk >/dev/null 2>&1; then
+    exec apk update "${'$'}@"
+  fi
+  exit 0
+elif [ "${'$'}SUBCMD" = "install" ]; then
+  echo "Hermes Shim: Package installation requested for: ${'$'}@"
+  if command -v pkg >/dev/null 2>&1; then
+    exec pkg install -y "${'$'}@"
+  elif command -v apk >/dev/null 2>&1; then
+    APK_ARGS=""
+    for arg in "${'$'}@"; do
+      case "${'$'}arg" in
+        -y|--yes|--assume-yes|-q|--quiet)
+          ;;
+        *)
+          APK_ARGS="${'$'}APK_ARGS ${'$'}arg"
+          ;;
+      esac
+    done
+    exec apk add ${'$'}APK_ARGS
+  fi
+  exit 0
+else
+  exit 0
+fi
+"""
+
+        val TOOLCHAIN_SHIMS: Map<String, String> = mapOf(
+            "bin/sudo" to SUDO_SHIM_SCRIPT,
+            "bin/apt" to APT_SHIM_SCRIPT,
+            "bin/apt-get" to APT_SHIM_SCRIPT
+        )
     }
 
     val usrDir: File
@@ -64,6 +145,62 @@ open class BootstrapExtractor(
 
     val markerFile: File
         get() = File(filesDir, MARKER_FILE_NAME)
+
+    /**
+     * Ensures POSIX toolchain shims (sudo, apt, apt-get) are installed into ${usrDir}/bin
+     * with executable permissions (0755), self-healing any missing or corrupted binaries.
+     */
+    open fun ensureToolchainShims(): Boolean {
+        val binDir = File(usrDir, "bin")
+        if (!binDir.exists()) {
+            binDir.mkdirs()
+        }
+        val usrBinDir = File(usrDir, "usr/bin")
+        if (!usrBinDir.exists()) {
+            usrBinDir.mkdirs()
+        }
+
+        var allOk = true
+        for ((relPath, script) in TOOLCHAIN_SHIMS) {
+            val shimFile = File(usrDir, relPath)
+            val mirrorFile = File(usrBinDir, shimFile.name)
+            try {
+                if (!shimFile.exists() || !shimFile.isFile || shimFile.length() < 10L) {
+                    shimFile.parentFile?.mkdirs()
+                    shimFile.writeText(script, Charsets.UTF_8)
+                    try {
+                        Log.i("BootstrapExtractor", "Auto-healed toolchain shim: $relPath")
+                    } catch (_: Throwable) {}
+                }
+                shimFile.setReadable(true, false)
+                shimFile.setWritable(true, true)
+                shimFile.setExecutable(true, false)
+
+                if (!shimFile.exists() || !shimFile.canExecute()) {
+                    allOk = false
+                }
+
+                // Also ensure mirror in usr/usr/bin for absolute /usr/bin inside PRoot rootfs
+                if (!mirrorFile.exists() || !mirrorFile.isFile || mirrorFile.length() < 10L) {
+                    mirrorFile.parentFile?.mkdirs()
+                    mirrorFile.writeText(script, Charsets.UTF_8)
+                }
+                mirrorFile.setReadable(true, false)
+                mirrorFile.setWritable(true, true)
+                mirrorFile.setExecutable(true, false)
+
+                if (!mirrorFile.exists() || !mirrorFile.canExecute()) {
+                    allOk = false
+                }
+            } catch (e: Throwable) {
+                allOk = false
+                try {
+                    Log.w("BootstrapExtractor", "Failed to ensure toolchain shim $relPath: ${e.message}")
+                } catch (_: Throwable) {}
+            }
+        }
+        return allOk
+    }
 
     /**
      * Diagnostic verification of runtime userland environment.
@@ -104,6 +241,9 @@ open class BootstrapExtractor(
         if (!usrExists) {
             issues.add("Userland directory ($USR_DIR_NAME) is missing or not a directory")
         } else {
+            // Auto-heal missing or corrupted toolchain shims
+            ensureToolchainShims()
+
             // 3. Validate critical binaries
             for (binRelPath in CRITICAL_BINARIES) {
                 val binFile = File(usrDir, binRelPath)
@@ -117,6 +257,24 @@ open class BootstrapExtractor(
                     if (!binFile.canExecute()) {
                         issues.add("Critical binary is not executable: $binRelPath")
                     }
+                }
+            }
+
+            // 4. Validate toolchain shims
+            val usrBinDir = File(usrDir, "usr/bin")
+            for ((relPath, _) in TOOLCHAIN_SHIMS) {
+                val shimFile = File(usrDir, relPath)
+                if (!shimFile.exists()) {
+                    issues.add("Missing toolchain shim: $relPath")
+                } else if (!shimFile.canExecute()) {
+                    issues.add("Toolchain shim is not executable: $relPath")
+                }
+
+                val mirrorFile = File(usrBinDir, shimFile.name)
+                if (!mirrorFile.exists()) {
+                    issues.add("Missing mirror toolchain shim: usr/bin/${shimFile.name}")
+                } else if (!mirrorFile.canExecute()) {
+                    issues.add("Mirror toolchain shim is not executable: usr/bin/${shimFile.name}")
                 }
             }
         }
@@ -170,7 +328,11 @@ open class BootstrapExtractor(
             if (!cleanUserland()) {
                 return@withContext ExtractionResult.Error("Failed to cleanly purge previous userland directory")
             }
-            extractFromStream(inputStream, onProgress)
+            val result = extractFromStream(inputStream, onProgress)
+            if (result is ExtractionResult.Success) {
+                ensureToolchainShims()
+            }
+            result
         } catch (e: Exception) {
             ExtractionResult.Error("Runtime repair failed: ${e.message}", e)
         }
@@ -192,7 +354,11 @@ open class BootstrapExtractor(
             if (!cleanUserland()) {
                 return@withContext ExtractionResult.Error("Failed to cleanly purge previous userland directory")
             }
-            extractFromStream(inputStream, onProgress)
+            val result = extractFromStream(inputStream, onProgress)
+            if (result is ExtractionResult.Success) {
+                ensureToolchainShims()
+            }
+            result
         } catch (e: Exception) {
             ExtractionResult.Error("Runtime repair failed: ${e.message}", e)
         }
@@ -353,6 +519,7 @@ open class BootstrapExtractor(
 
             onProgress?.invoke(0.88f, "Setting POSIX execution permissions...")
             enforcePermissions(usrDir)
+            ensureToolchainShims()
 
             onProgress?.invoke(0.95f, "Verifying binary integrity...")
             for (binRelPath in CRITICAL_BINARIES) {

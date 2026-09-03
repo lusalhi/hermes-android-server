@@ -118,6 +118,7 @@ class EncryptedConfigRepository(
         const val KEY_SKILL_FILE_MANAGER = "key_skill_file_manager"
         const val KEY_SKILL_BASH_RUNNER = "key_skill_bash_runner"
         const val KEY_SKILL_CRON_SCHEDULER = "key_skill_cron_scheduler"
+        const val KEY_SHARED_STORAGE_ENABLED = "key_shared_storage_enabled"
         const val KEY_CUSTOM_SKILL_PREFIX = "key_custom_skill_"
 
         fun create(context: Context): ConfigRepository {
@@ -166,6 +167,7 @@ class EncryptedConfigRepository(
             .putBoolean(KEY_SKILL_FILE_MANAGER, config.skills.fileManager)
             .putBoolean(KEY_SKILL_BASH_RUNNER, config.skills.bashRunner)
             .putBoolean(KEY_SKILL_CRON_SCHEDULER, config.skills.cronScheduler)
+            .putBoolean(KEY_SHARED_STORAGE_ENABLED, config.skills.sharedStorageEnabled)
 
         // Remove stale custom skill keys not present in new configuration
         prefs.all.keys
@@ -361,6 +363,7 @@ class EncryptedConfigRepository(
             fileManager = prefs.getBoolean(KEY_SKILL_FILE_MANAGER, true),
             bashRunner = prefs.getBoolean(KEY_SKILL_BASH_RUNNER, true),
             cronScheduler = prefs.getBoolean(KEY_SKILL_CRON_SCHEDULER, true),
+            sharedStorageEnabled = prefs.getBoolean(KEY_SHARED_STORAGE_ENABLED, true),
             customSkills = customMap
         )
     }
@@ -373,6 +376,7 @@ class EncryptedConfigRepository(
             .putBoolean(KEY_SKILL_FILE_MANAGER, skills.fileManager)
             .putBoolean(KEY_SKILL_BASH_RUNNER, skills.bashRunner)
             .putBoolean(KEY_SKILL_CRON_SCHEDULER, skills.cronScheduler)
+            .putBoolean(KEY_SHARED_STORAGE_ENABLED, skills.sharedStorageEnabled)
 
         // Remove stale custom skill keys not present in new configuration
         prefs.all.keys
@@ -390,6 +394,7 @@ class EncryptedConfigRepository(
         SkillsConfig.SKILL_FILE_MANAGER -> prefs.getBoolean(KEY_SKILL_FILE_MANAGER, true)
         SkillsConfig.SKILL_BASH_RUNNER -> prefs.getBoolean(KEY_SKILL_BASH_RUNNER, true)
         SkillsConfig.SKILL_CRON_SCHEDULER -> prefs.getBoolean(KEY_SKILL_CRON_SCHEDULER, true)
+        SkillsConfig.SKILL_SHARED_STORAGE, SkillsConfig.KEY_SHARED_STORAGE_ENABLED -> prefs.getBoolean(KEY_SHARED_STORAGE_ENABLED, true)
         else -> prefs.getBoolean("$KEY_CUSTOM_SKILL_PREFIX$skillId", true)
     }
 
@@ -400,6 +405,7 @@ class EncryptedConfigRepository(
             SkillsConfig.SKILL_FILE_MANAGER -> editor.putBoolean(KEY_SKILL_FILE_MANAGER, enabled)
             SkillsConfig.SKILL_BASH_RUNNER -> editor.putBoolean(KEY_SKILL_BASH_RUNNER, enabled)
             SkillsConfig.SKILL_CRON_SCHEDULER -> editor.putBoolean(KEY_SKILL_CRON_SCHEDULER, enabled)
+            SkillsConfig.SKILL_SHARED_STORAGE, SkillsConfig.KEY_SHARED_STORAGE_ENABLED -> editor.putBoolean(KEY_SHARED_STORAGE_ENABLED, enabled)
             else -> editor.putBoolean("$KEY_CUSTOM_SKILL_PREFIX$skillId", enabled)
         }
         editor.apply()

@@ -65,7 +65,8 @@ data class ProcessConfig(
         fun createHermesDaemonConfig(
             filesDir: File,
             customEnv: Map<String, String> = emptyMap(),
-            hermesConfig: HermesConfig? = null
+            hermesConfig: HermesConfig? = null,
+            downloadDir: File = File(System.getProperty("hermes.download.dir") ?: "/sdcard/Download")
         ): ProcessConfig {
             val usrDir = File(filesDir, BootstrapExtractor.USR_DIR_NAME)
             val prootBin = File(usrDir, "bin/proot").absolutePath
@@ -73,6 +74,12 @@ data class ProcessConfig(
             val pythonBin = File(usrDir, "bin/python3").absolutePath
             val configFile = File(filesDir, DAEMON_CONFIG_FILENAME).absolutePath
             val tmpDir = File(filesDir, "tmp").apply { if (!exists()) mkdirs() }
+
+            if (File(usrDir, "bin").exists()) {
+                try {
+                    BootstrapExtractor(filesDir).ensureToolchainShims()
+                } catch (_: Throwable) {}
+            }
 
             val effectiveConfig = hermesConfig ?: run {
                 val cFile = File(configFile)
@@ -122,16 +129,36 @@ data class ProcessConfig(
             val useProot = File(prootBin).exists() && File(prootBin).canExecute()
             val executable = if (useProot) prootBin else if (File(hermesBin).exists()) hermesBin else pythonBin
             val arguments = if (useProot) {
-                listOf(
+                val prootArgs = mutableListOf(
                     "-r", usrDir.absolutePath,
                     "-0",
                     "-b", "/dev",
                     "-b", "/proc",
-                    "-b", filesDir.absolutePath,
-                    "-w", filesDir.absolutePath,
-                    hermesBin,
-                    "gateway", "run"
+                    "-b", filesDir.absolutePath
                 )
+                if (effectiveConfig.skills.sharedStorageEnabled) {
+                    val sharedDir = File(filesDir, "shared").apply {
+                        if (!exists()) mkdirs()
+                    }
+                    if (sharedDir.exists() && sharedDir.canRead()) {
+                        File(usrDir, "shared").mkdirs()
+                        prootArgs.add("-b")
+                        prootArgs.add("${sharedDir.absolutePath}:/shared")
+                    }
+                    if (downloadDir.exists() && downloadDir.isDirectory && downloadDir.canRead()) {
+                        File(usrDir, "sdcard/Download").mkdirs()
+                        prootArgs.add("-b")
+                        prootArgs.add("${downloadDir.absolutePath}:/sdcard/Download")
+                    }
+                }
+                prootArgs.addAll(
+                    listOf(
+                        "-w", filesDir.absolutePath,
+                        hermesBin,
+                        "gateway", "run"
+                    )
+                )
+                prootArgs
             } else if (File(hermesBin).exists()) {
                 listOf("gateway", "run")
             } else {
