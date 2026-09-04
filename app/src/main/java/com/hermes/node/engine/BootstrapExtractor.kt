@@ -50,7 +50,7 @@ open class BootstrapExtractor(
         const val BOOTSTRAP_ASSET_NAME = "bootstrap-arm64.tar.xz"
         const val MARKER_FILE_NAME = ".bootstrap_complete"
         const val USR_DIR_NAME = "usr"
-        const val BOOTSTRAP_VERSION = 3
+        const val BOOTSTRAP_VERSION = 4
         private const val MIN_REQUIRED_DISK_BYTES = 20L * 1024 * 1024 // 20 MB
 
         val CRITICAL_BINARIES = listOf(
@@ -144,6 +144,18 @@ fi
 
 DIR="${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)"
 USR_DIR="${'$'}(cd "${'$'}DIR/.." && pwd)"
+
+if [ -d "/usr/lib/python3.12" ]; then
+    export PYTHONHOME="/usr"
+elif [ -d "${'$'}USR_DIR/lib/python3.12" ]; then
+    export PYTHONHOME="${'$'}USR_DIR"
+elif [ -d "${'$'}USR_DIR/usr/lib/python3.12" ]; then
+    export PYTHONHOME="${'$'}USR_DIR/usr"
+fi
+
+export PYTHONPATH="/usr/lib/python3.12/site-packages:/usr/lib/python3.11/site-packages:${'$'}USR_DIR/lib/python3.12/site-packages:${'$'}USR_DIR/usr/lib/python3.12/site-packages:${'$'}PYTHONPATH"
+export LD_LIBRARY_PATH="/lib:/usr/lib:${'$'}USR_DIR/lib:${'$'}USR_DIR/usr/lib:${'$'}LD_LIBRARY_PATH"
+export PATH="/bin:/usr/bin:/sbin:/usr/sbin:${'$'}USR_DIR/bin:${'$'}USR_DIR/usr/bin:${'$'}PATH"
 
 PYTHON_BIN=""
 if [ -f "${'$'}DIR/python3" ]; then
@@ -277,7 +289,44 @@ exec python3 -m hermes "${'$'}@"
         if (binHermes.exists() || usrBinHermes.exists()) {
             ensureHermesLauncher(usrDir)
         }
+        ensurePythonSymlinks(usrDir)
         return allOk
+    }
+
+    /**
+     * Ensures Python standard library and shared libraries are accessible
+     * via symlinks from usrDir/lib to usrDir/usr/lib.
+     */
+    open fun ensurePythonSymlinks(targetDir: File = usrDir): Boolean {
+        return try {
+            val libDir = File(targetDir, "lib").apply { if (!exists()) mkdirs() }
+            val usrLibDir = File(targetDir, "usr/lib")
+            
+            // Link python3.12 and python3.11
+            listOf("python3.12", "python3.11").forEach { pyName ->
+                val link = File(libDir, pyName)
+                val target = File(usrLibDir, pyName)
+                if (target.exists() && !link.exists()) {
+                    try {
+                        Files.createSymbolicLink(link.toPath(), Paths.get("../usr/lib/$pyName"))
+                    } catch (_: Throwable) {}
+                }
+            }
+
+            // Link all .so files from usr/lib to lib if missing
+            if (usrLibDir.exists() && usrLibDir.isDirectory) {
+                usrLibDir.listFiles()?.forEach { soFile ->
+                    if (soFile.name.contains(".so") && !File(libDir, soFile.name).exists()) {
+                        try {
+                            Files.createSymbolicLink(File(libDir, soFile.name).toPath(), Paths.get("../usr/lib/${soFile.name}"))
+                        } catch (_: Throwable) {}
+                    }
+                }
+            }
+            true
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     /**
@@ -743,11 +792,40 @@ exec python3 -m hermes "${'$'}@"
                 }
             }
         }
+
+        // Explicitly guarantee dynamic linker and critical binaries are executable
+        listOf(
+            File(dir, "lib/ld-musl-aarch64.so.1"),
+            File(dir, "usr/lib/ld-musl-aarch64.so.1"),
+            File(dir, "bin/busybox"),
+            File(dir, "bin/sh"),
+            File(dir, "bin/proot"),
+            File(dir, "bin/python3"),
+            File(dir, "bin/hermes"),
+            File(dir, "bin/apk"),
+            File(dir, "bin/bash"),
+            File(dir, "usr/bin/busybox"),
+            File(dir, "usr/bin/sh"),
+            File(dir, "usr/bin/proot"),
+            File(dir, "usr/bin/python3"),
+            File(dir, "usr/bin/hermes"),
+            File(dir, "usr/bin/apk"),
+            File(dir, "usr/bin/bash"),
+            File(dir, "libexec/proot/loader"),
+            File(dir, "usr/libexec/proot/loader")
+        ).forEach { f ->
+            if (f.exists()) {
+                f.setReadable(true, false)
+                f.setExecutable(true, false)
+            }
+        }
     }
 
     private fun shouldBeExecutable(path: String, mode: Int): Boolean {
         if (path.contains("/bin/") || path.startsWith("bin/") || path.startsWith("usr/bin/")) return true
+        if (path.contains("/sbin/") || path.startsWith("sbin/") || path.startsWith("usr/sbin/")) return true
         if (path.contains("/libexec/") || path.startsWith("libexec/") || path.startsWith("usr/libexec/")) return true
+        if (path.contains("ld-musl") || path.contains("ld-linux") || path.endsWith(".so.1") || path.contains("/lib/ld-")) return true
         return (mode and 0b001_001_001) != 0
     }
 

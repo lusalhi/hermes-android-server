@@ -82,12 +82,24 @@ data class ProcessConfig(
                     if (File(usrDir, "bin/hermes").exists() || File(usrDir, "usr/bin/hermes").exists()) {
                         extractor.ensureHermesLauncher()
                     }
-                    listOf("python3", "proot", "hermes", "apk", "bash", "sh").forEach { name ->
+                    extractor.enforcePermissions(usrDir)
+                    listOf("python3", "proot", "hermes", "apk", "bash", "sh", "busybox").forEach { name ->
                         listOf(File(usrDir, "bin/$name"), File(usrDir, "usr/bin/$name")).forEach { file ->
                             if (file.exists()) {
                                 file.setReadable(true, false)
                                 file.setExecutable(true, false)
                             }
+                        }
+                    }
+                    listOf(
+                        File(usrDir, "lib/ld-musl-aarch64.so.1"),
+                        File(usrDir, "usr/lib/ld-musl-aarch64.so.1"),
+                        File(usrDir, "libexec/proot/loader"),
+                        File(usrDir, "usr/libexec/proot/loader")
+                    ).forEach { file ->
+                        if (file.exists()) {
+                            file.setReadable(true, false)
+                            file.setExecutable(true, false)
                         }
                     }
                 } catch (_: Throwable) {}
@@ -156,6 +168,9 @@ data class ProcessConfig(
             val useProot = File(prootBin).exists() && File(prootBin).canExecute()
             val executable = if (useProot) prootBin else if (File(hermesBin).exists()) hermesBin else pythonBin
             val arguments = if (useProot) {
+                val canonicalFilesDir = try { filesDir.canonicalFile } catch (_: Throwable) { filesDir }
+                val pkgName = filesDir.parentFile?.name ?: "com.hermes.node"
+
                 val prootArgs = mutableListOf(
                     "-r", usrDir.absolutePath,
                     "-0",
@@ -163,6 +178,34 @@ data class ProcessConfig(
                     "-b", "/proc",
                     "-b", filesDir.absolutePath
                 )
+                if (canonicalFilesDir.absolutePath != filesDir.absolutePath) {
+                    prootArgs.add("-b")
+                    prootArgs.add(canonicalFilesDir.absolutePath)
+                }
+                // Bind standard Android app storage aliases so PRoot realpath lookups never fail
+                prootArgs.add("-b")
+                prootArgs.add("${filesDir.absolutePath}:/data/data/$pkgName/files")
+                prootArgs.add("-b")
+                prootArgs.add("${filesDir.absolutePath}:/data/user/0/$pkgName/files")
+
+                // Ensure tmp directories exist and bind /tmp inside chroot
+                val canonicalTmpDir = try { tmpDir.canonicalFile } catch (_: Throwable) { tmpDir }
+                canonicalTmpDir.mkdirs()
+                canonicalTmpDir.setReadable(true, false)
+                canonicalTmpDir.setWritable(true, false)
+                canonicalTmpDir.setExecutable(true, false)
+                tmpDir.mkdirs()
+                tmpDir.setReadable(true, false)
+                tmpDir.setWritable(true, false)
+                tmpDir.setExecutable(true, false)
+                File(usrDir, "tmp").mkdirs()
+                prootArgs.add("-b")
+                prootArgs.add("${tmpDir.absolutePath}:/tmp")
+                if (canonicalTmpDir.absolutePath != tmpDir.absolutePath) {
+                    prootArgs.add("-b")
+                    prootArgs.add(canonicalTmpDir.absolutePath)
+                }
+
                 if (effectiveConfig.skills.sharedStorageEnabled) {
                     val sharedDir = File(filesDir, "shared").apply {
                         if (!exists()) mkdirs()
@@ -178,10 +221,12 @@ data class ProcessConfig(
                         prootArgs.add("${downloadDir.absolutePath}:/sdcard/Download")
                     }
                 }
+                val hermesCmd = if (File(usrDir, "bin/hermes").exists()) "/bin/hermes" else hermesBin
                 prootArgs.addAll(
                     listOf(
                         "-w", filesDir.absolutePath,
-                        hermesBin,
+                        "/bin/sh",
+                        hermesCmd,
                         "gateway", "run"
                     )
                 )

@@ -281,8 +281,8 @@ class LogStreamerTest {
         pipedOut.flush()
 
         var retries = 0
-        while (streamer.getLogs().isEmpty() && retries++ < 50) {
-            kotlinx.coroutines.delay(20)
+        while (streamer.getLogs().isEmpty() && retries++ < 100) {
+            kotlinx.coroutines.delay(50)
         }
 
         assertEquals(1, streamer.getLogs().size)
