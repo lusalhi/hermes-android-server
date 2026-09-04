@@ -37,18 +37,10 @@ open class HermesServerService : Service() {
     var processController: ProcessControllerInterface? = null
     var logStreamer: LogStreamerInterface? = null
     var tunnelManager: TunnelManagerInterface? = null
-    var telegramGatewayManager: com.hermes.node.engine.TelegramGatewayManagerInterface? = null
     internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
     internal var serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var processExitListener: ((Int) -> Unit)? = null
     private var processStateCollectorJob: Job? = null
-
-    internal fun ensureTelegramGatewayManager(): com.hermes.node.engine.TelegramGatewayManagerInterface {
-        if (telegramGatewayManager == null) {
-            telegramGatewayManager = com.hermes.node.engine.TelegramGatewayManager(ioDispatcher = ioDispatcher)
-        }
-        return telegramGatewayManager!!
-    }
 
     internal fun ensureTunnelManager(): TunnelManagerInterface {
         if (tunnelManager == null) {
@@ -140,11 +132,7 @@ open class HermesServerService : Service() {
         try {
             stopTunnelBlocking()
         } catch (_: Throwable) {}
-        try {
-            serviceScope.launch(ioDispatcher) {
-                try { telegramGatewayManager?.stop() } catch (_: Throwable) {}
-            }
-        } catch (_: Throwable) {}
+
         try {
             if (wakeLockManager?.isHeld == true) {
                 wakeLockManager?.release()
@@ -197,11 +185,7 @@ open class HermesServerService : Service() {
         try {
             stopTunnelBlocking()
         } catch (_: Throwable) {}
-        try {
-            runBlocking(ioDispatcher) {
-                telegramGatewayManager?.stop()
-            }
-        } catch (_: Throwable) {}
+
         try {
             logStreamer?.stop()
         } catch (ignored: Throwable) {}
@@ -299,6 +283,9 @@ open class HermesServerService : Service() {
                     val prov = targetConfig.environment["HERMES_SEARCH_PROVIDER"]
                     logStreamer?.append("Web search skill active with provider: $prov", com.hermes.node.viewmodel.LogLevel.INFO)
                 }
+                if (targetConfig.environment.containsKey("TELEGRAM_BOT_TOKEN")) {
+                    logStreamer?.append("Telegram gateway enabled: launching upstream Hermes daemon", com.hermes.node.viewmodel.LogLevel.INFO)
+                }
             } catch (_: Throwable) {}
             val startResult = runBlocking(ioDispatcher) {
                 controller.start(targetConfig)
@@ -342,43 +329,12 @@ open class HermesServerService : Service() {
             Log.i(TAG, "HermesServerService started in foreground")
         } catch (ignored: Throwable) {}
 
-        // Connect Telegram Gateway if enabled in configuration
-        val hermesConfig = try {
-            val configFile = File(safeFilesDir, "hermes.json")
-            com.hermes.node.data.ConfigSerializer(configFile).deserialize().getOrNull()
-        } catch (_: Throwable) { null }
-
-        if (hermesConfig?.gateway?.telegram?.enabled == true && hermesConfig.gateway.telegram.botToken.isNotBlank()) {
-            val tgManager = ensureTelegramGatewayManager()
-            serviceScope.launch(ioDispatcher) {
-                try {
-                    logStreamer?.append("Telegram Gateway: connecting to Telegram Bot API...", com.hermes.node.viewmodel.LogLevel.INFO)
-                    val authResult = tgManager.start(
-                        botToken = hermesConfig.gateway.telegram.botToken,
-                        adminUserIds = hermesConfig.gateway.telegram.adminUserIds,
-                        hermesConfig = hermesConfig,
-                        logStreamer = logStreamer
-                    )
-                    if (authResult.isSuccess) {
-                        logStreamer?.append("Telegram Gateway active: @${authResult.getOrNull()} is online and listening for messages.", com.hermes.node.viewmodel.LogLevel.INFO)
-                    }
-                } catch (e: Exception) {
-                    logStreamer?.append("Telegram Gateway connection error: ${e.message}", com.hermes.node.viewmodel.LogLevel.WARN)
-                }
-            }
-        }
-
         return true
     }
 
     fun stopForegroundServiceInternal(): ProcessStopResult {
         try {
             stopTunnelBlocking()
-        } catch (_: Throwable) {}
-        try {
-            serviceScope.launch(ioDispatcher) {
-                try { telegramGatewayManager?.stop() } catch (_: Throwable) {}
-            }
         } catch (_: Throwable) {}
         val stopResult = processController?.let { controller ->
             runBlocking(ioDispatcher) {

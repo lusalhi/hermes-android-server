@@ -69,7 +69,8 @@ development_status:
   6-3-search-api-key-configuration-for-web-search: done
   6-4-agent-toolchain-shims-and-storage-bridge: done
   6-5-full-package-manager-and-dynamic-rootfs-extraction: review
-  6-6-telegram-multi-turn-memory-and-agent-bridge: review
+  6-6-telegram-multi-turn-memory-and-agent-bridge: superseded
+  6-7-purge-custom-telegram-and-wire-upstream-hermes: review
   epic-6-retrospective: optional
 action_items:
   - id: "epic-2-retro-item-1-in-epic-3-decouple-sub-process-lifecycle"

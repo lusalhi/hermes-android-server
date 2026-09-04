@@ -138,6 +138,11 @@ fi
             "bin/apt" to APT_SHIM_SCRIPT,
             "bin/apt-get" to APT_SHIM_SCRIPT
         )
+
+        val HERMES_LAUNCHER_SCRIPT = """#!/bin/sh
+# /usr/bin/hermes
+exec python3 -m hermes "${'$'}@"
+"""
     }
 
     val usrDir: File
@@ -145,6 +150,32 @@ fi
 
     val markerFile: File
         get() = File(filesDir, MARKER_FILE_NAME)
+
+    /**
+     * Ensures /usr/bin/hermes launcher script delegates directly to Python:
+     * exec python3 -m hermes "$@"
+     */
+    open fun ensureHermesLauncher(targetDir: File = usrDir, forceCreate: Boolean = false): Boolean {
+        val binHermes = File(targetDir, "bin/hermes")
+        val usrBinHermes = File(targetDir, "usr/bin/hermes")
+        if (!forceCreate && !binHermes.exists() && !usrBinHermes.exists()) {
+            return false
+        }
+        return try {
+            val script = HERMES_LAUNCHER_SCRIPT
+            for (file in listOf(binHermes, usrBinHermes)) {
+                file.parentFile?.mkdirs()
+                file.setWritable(true, true)
+                file.writeText(script, Charsets.UTF_8)
+                file.setReadable(true, false)
+                file.setWritable(true, true)
+                file.setExecutable(true, false)
+            }
+            binHermes.canExecute() && usrBinHermes.canExecute()
+        } catch (e: Throwable) {
+            false
+        }
+    }
 
     /**
      * Ensures POSIX toolchain shims (sudo, apt, apt-get) are installed into ${usrDir}/bin
@@ -198,6 +229,11 @@ fi
                     Log.w("BootstrapExtractor", "Failed to ensure toolchain shim $relPath: ${e.message}")
                 } catch (_: Throwable) {}
             }
+        }
+        val binHermes = File(usrDir, "bin/hermes")
+        val usrBinHermes = File(usrBinDir, "hermes")
+        if (binHermes.exists() || usrBinHermes.exists()) {
+            ensureHermesLauncher(usrDir)
         }
         return allOk
     }
@@ -580,6 +616,7 @@ fi
             onProgress?.invoke(0.88f, "Setting POSIX execution permissions...")
             enforcePermissions(usrDir)
             ensureToolchainShims()
+            ensureHermesLauncher(usrDir)
 
             onProgress?.invoke(0.95f, "Verifying binary integrity...")
             for (binRelPath in CRITICAL_BINARIES) {

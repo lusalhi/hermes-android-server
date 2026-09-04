@@ -648,4 +648,34 @@ class BootstrapExtractorTest {
         assertTrue(apt.exists() && apt.canExecute())
         assertTrue(aptGet.exists() && aptGet.canExecute())
     }
+
+    @Test
+    fun extractFromStream_generatesHermesLauncherScript_withPythonModuleExecution() = runTest(testDispatcher) {
+        val tarBytes = createTestTarXz(getStandardArchiveEntries())
+        val inStream = ByteArrayInputStream(tarBytes)
+
+        val result = extractor.extractFromStream(inStream)
+        assertTrue(result is ExtractionResult.Success)
+
+        val hermes = File(tempDir, "usr/bin/hermes")
+        assertTrue(hermes.exists() && hermes.canExecute())
+        val content = hermes.readText(Charsets.UTF_8)
+        assertTrue("Launcher must execute python3 -m hermes", content.contains("exec python3 -m hermes \"$@\""))
+    }
+
+    @Test
+    fun ensureHermesLauncher_createsExecutableHermesLauncher() {
+        val created = extractor.ensureHermesLauncher(forceCreate = true)
+        assertTrue(created)
+
+        val binHermes = File(extractor.usrDir, "bin/hermes")
+        val usrBinHermes = File(extractor.usrDir, "usr/bin/hermes")
+
+        assertTrue(binHermes.exists() && binHermes.isFile && binHermes.canExecute())
+        assertTrue(usrBinHermes.exists() && usrBinHermes.isFile && usrBinHermes.canExecute())
+
+        val script = binHermes.readText(Charsets.UTF_8)
+        assertTrue(script.contains("exec python3 -m hermes \"$@\""))
+        assertEquals(script, usrBinHermes.readText(Charsets.UTF_8))
+    }
 }

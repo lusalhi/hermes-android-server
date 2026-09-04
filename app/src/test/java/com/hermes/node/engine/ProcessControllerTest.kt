@@ -1,8 +1,10 @@
 package com.hermes.node.engine
 
 import com.hermes.node.data.ConfigSerializer
+import com.hermes.node.data.model.GatewayConfig
 import com.hermes.node.data.model.HermesConfig
 import com.hermes.node.data.model.SkillsConfig
+import com.hermes.node.data.model.TelegramGatewayConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -631,6 +633,222 @@ class ProcessControllerTest {
         assertTrue("sudo shim should be auto-healed", sudoShim.exists() && sudoShim.canExecute())
         assertTrue("apt shim should be auto-healed", aptShim.exists() && aptShim.canExecute())
         assertTrue("apt-get shim should be auto-healed", aptGetShim.exists() && aptGetShim.canExecute())
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_whenTelegramEnabled_injectsTelegramEnvVars_andSyncsTelegramBlock() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_tg_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val hermesConfig = HermesConfig(
+            gateway = GatewayConfig(
+                telegram = TelegramGatewayConfig(
+                    enabled = true,
+                    botToken = "123456:BOT_SECRET_TOKEN",
+                    adminUserIds = "111, 222, 333"
+                )
+            )
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig
+        )
+
+        assertEquals("123456:BOT_SECRET_TOKEN", config.environment["TELEGRAM_BOT_TOKEN"])
+        assertEquals("111, 222, 333", config.environment["TELEGRAM_ALLOWED_USERS"])
+        assertEquals("111, 222, 333", config.environment["TELEGRAM_ADMIN_IDS"])
+
+        // Check .hermes/.env and config.yaml
+        val hermesDir = File(tempDir, ".hermes")
+        assertTrue(hermesDir.exists())
+
+        val envFile = File(hermesDir, ".env")
+        assertTrue(envFile.exists())
+        val envContent = envFile.readText(Charsets.UTF_8)
+        assertTrue(envContent.contains("TELEGRAM_BOT_TOKEN=123456:BOT_SECRET_TOKEN"))
+        assertTrue(envContent.contains("TELEGRAM_ALLOWED_USERS=111, 222, 333"))
+        assertTrue(envContent.contains("TELEGRAM_ADMIN_IDS=111, 222, 333"))
+
+        val yamlFile = File(hermesDir, "config.yaml")
+        assertTrue(yamlFile.exists())
+        val yamlContent = yamlFile.readText(Charsets.UTF_8)
+        assertTrue(yamlContent.contains("telegram:"))
+        assertTrue(yamlContent.contains("enabled: true"))
+        assertTrue(yamlContent.contains("bot_token: \"123456:BOT_SECRET_TOKEN\""))
+        assertTrue(yamlContent.contains("allowed_users:"))
+        assertTrue(yamlContent.contains("- \"111\""))
+        assertTrue(yamlContent.contains("- \"222\""))
+        assertTrue(yamlContent.contains("- \"333\""))
+        assertTrue(yamlContent.contains("admin_ids:"))
+        assertTrue(yamlContent.contains("gateways:"))
+
+        // Assert POSIX 0600 permissions
+        for (file in listOf(envFile, yamlFile)) {
+            try {
+                val perms = java.nio.file.Files.getPosixFilePermissions(file.toPath())
+                assertEquals(
+                    setOf(
+                        java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                        java.nio.file.attribute.PosixFilePermission.OWNER_WRITE
+                    ),
+                    perms
+                )
+            } catch (_: UnsupportedOperationException) {
+                assertTrue("File should be readable by owner", file.canRead())
+                assertTrue("File should be writable by owner", file.canWrite())
+                assertFalse("File should not be executable", file.canExecute())
+            }
+        }
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_whenTelegramDisabled_omitsTelegramEnvVars_andMarksTelegramDisabledInYaml() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_tg_disabled_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val hermesConfig = HermesConfig(
+            gateway = GatewayConfig(
+                telegram = TelegramGatewayConfig(
+                    enabled = false,
+                    botToken = "123456:DISABLED_TOKEN",
+                    adminUserIds = "111,222"
+                )
+            )
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig
+        )
+
+        assertFalse(config.environment.containsKey("TELEGRAM_BOT_TOKEN"))
+        assertFalse(config.environment.containsKey("TELEGRAM_ALLOWED_USERS"))
+        assertFalse(config.environment.containsKey("TELEGRAM_ADMIN_IDS"))
+
+        val envFile = File(File(tempDir, ".hermes"), ".env")
+        if (envFile.exists()) {
+            val envContent = envFile.readText(Charsets.UTF_8)
+            assertFalse(envContent.contains("TELEGRAM_BOT_TOKEN"))
+            assertFalse(envContent.contains("TELEGRAM_ALLOWED_USERS"))
+        }
+
+        val yamlFile = File(File(tempDir, ".hermes"), "config.yaml")
+        assertTrue(yamlFile.exists())
+        val yamlContent = yamlFile.readText(Charsets.UTF_8)
+        assertTrue(yamlContent.contains("telegram:"))
+        assertTrue(yamlContent.contains("enabled: false"))
+        assertFalse(yamlContent.contains("bot_token"))
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun createHermesDaemonConfig_whenTelegramEnabledWithoutAdminIds_injectsTokenOnly() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_tg_no_admin_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val hermesConfig = HermesConfig(
+            gateway = GatewayConfig(
+                telegram = TelegramGatewayConfig(
+                    enabled = true,
+                    botToken = "123456:TOKEN_ONLY",
+                    adminUserIds = "   "
+                )
+            )
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig
+        )
+
+        assertEquals("123456:TOKEN_ONLY", config.environment["TELEGRAM_BOT_TOKEN"])
+        assertFalse(config.environment.containsKey("TELEGRAM_ALLOWED_USERS"))
+        assertFalse(config.environment.containsKey("TELEGRAM_ADMIN_IDS"))
+
+        val envFile = File(File(tempDir, ".hermes"), ".env")
+        val envContent = envFile.readText(Charsets.UTF_8)
+        assertTrue(envContent.contains("TELEGRAM_BOT_TOKEN=123456:TOKEN_ONLY"))
+        assertFalse(envContent.contains("TELEGRAM_ALLOWED_USERS"))
+
+        val yamlFile = File(File(tempDir, ".hermes"), "config.yaml")
+        val yamlContent = yamlFile.readText(Charsets.UTF_8)
+        assertTrue(yamlContent.contains("telegram:"))
+        assertTrue(yamlContent.contains("enabled: true"))
+        assertTrue(yamlContent.contains("bot_token: \"123456:TOKEN_ONLY\""))
+        assertFalse(yamlContent.contains("allowed_users"))
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun syncHermesConfig_preservesExistingSettings_whileUpdatingTelegramBlock() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_tg_preserve_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        val hermesDir = File(tempDir, ".hermes").apply { mkdirs() }
+
+        val envFile = File(hermesDir, ".env")
+        envFile.writeText(
+            """
+            CUSTOM_SETTING=my_value
+            TELEGRAM_BOT_TOKEN=old_token_123
+            TELEGRAM_ALLOWED_USERS=999
+            ANOTHER_VAR=keep_me
+            """.trimIndent() + "\n",
+            Charsets.UTF_8
+        )
+
+        val yamlFile = File(hermesDir, "config.yaml")
+        yamlFile.writeText(
+            """
+            model: "nous-hermes-2"
+            temperature: 0.5
+            telegram:
+              enabled: true
+              bot_token: "old_token_123"
+              allowed_users: "999"
+            custom_option: true
+            """.trimIndent() + "\n",
+            Charsets.UTF_8
+        )
+
+        val newConfig = HermesConfig(
+            gateway = GatewayConfig(
+                telegram = TelegramGatewayConfig(
+                    enabled = true,
+                    botToken = "new_tg_token_456",
+                    adminUserIds = "123, 456"
+                )
+            )
+        )
+        ProcessConfig.syncHermesConfig(tempDir, newConfig)
+
+        val envContent = envFile.readText(Charsets.UTF_8)
+        assertTrue(envContent.contains("CUSTOM_SETTING=my_value"))
+        assertTrue(envContent.contains("ANOTHER_VAR=keep_me"))
+        assertTrue(envContent.contains("TELEGRAM_BOT_TOKEN=new_tg_token_456"))
+        assertTrue(envContent.contains("TELEGRAM_ALLOWED_USERS=123, 456"))
+        assertFalse(envContent.contains("old_token_123"))
+        assertFalse(envContent.contains("999"))
+
+        val yamlContent = yamlFile.readText(Charsets.UTF_8)
+        assertTrue(yamlContent.contains("model: \"nous-hermes-2\""))
+        assertTrue(yamlContent.contains("temperature: 0.5"))
+        assertTrue(yamlContent.contains("custom_option: true"))
+        assertTrue(yamlContent.contains("telegram:"))
+        assertTrue(yamlContent.contains("enabled: true"))
+        assertTrue(yamlContent.contains("bot_token: \"new_tg_token_456\""))
+        assertTrue(yamlContent.contains("allowed_users:"))
+        assertTrue(yamlContent.contains("- \"123\""))
+        assertTrue(yamlContent.contains("- \"456\""))
+        assertTrue(yamlContent.contains("gateways:"))
+        assertFalse(yamlContent.contains("old_token_123"))
+        assertFalse(yamlContent.contains("999"))
 
         tempDir.deleteRecursively()
     }

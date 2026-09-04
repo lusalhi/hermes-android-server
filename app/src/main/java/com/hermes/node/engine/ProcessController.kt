@@ -77,7 +77,11 @@ data class ProcessConfig(
 
             if (File(usrDir, "bin").exists()) {
                 try {
-                    BootstrapExtractor(filesDir).ensureToolchainShims()
+                    val extractor = BootstrapExtractor(filesDir)
+                    extractor.ensureToolchainShims()
+                    if (File(usrDir, "bin/hermes").exists() || File(usrDir, "usr/bin/hermes").exists()) {
+                        extractor.ensureHermesLauncher()
+                    }
                 } catch (_: Throwable) {}
             }
 
@@ -120,6 +124,17 @@ data class ProcessConfig(
                     "exa" -> env["EXA_API_KEY"] = trimmedSearchKey
                 }
                 env["HERMES_SEARCH_PROVIDER"] = searchProvider
+            }
+
+            val isTelegramActive = effectiveConfig.gateway.telegram.enabled && effectiveConfig.gateway.telegram.botToken.trim().isNotBlank()
+            if (isTelegramActive) {
+                val trimmedTelegramToken = effectiveConfig.gateway.telegram.botToken.trim().replace("\r", "").replace("\n", "")
+                val trimmedAdminIds = effectiveConfig.gateway.telegram.adminUserIds.trim().replace("\r", "").replace("\n", "")
+                env["TELEGRAM_BOT_TOKEN"] = trimmedTelegramToken
+                if (trimmedAdminIds.isNotBlank()) {
+                    env["TELEGRAM_ALLOWED_USERS"] = trimmedAdminIds
+                    env["TELEGRAM_ADMIN_IDS"] = trimmedAdminIds
+                }
             }
 
             env.putAll(customEnv)
@@ -193,12 +208,18 @@ data class ProcessConfig(
                     SkillsConfig.SEARCH_PROVIDER_BRAVE
                 }
 
-                // Sanitize values (strip CRLF, escape double quotes)
-                val safeKey = trimmedKey.replace("\r", "").replace("\n", "").replace("\"", "\\\"")
-                val safeProvider = provider.replace("\r", "").replace("\n", "").replace("\"", "\\\"")
+                // Sanitize values (strip CRLF, escape backslashes and double quotes)
+                val safeKey = trimmedKey.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+                val safeProvider = provider.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
                 val isSearchActive = config.skills.webSearch && safeKey.isNotBlank()
 
-                // 1. Sync .env (preserve all non-search variables)
+                val trimmedTelegramToken = config.gateway.telegram.botToken.trim()
+                val safeTelegramToken = trimmedTelegramToken.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+                val trimmedTelegramAdminIds = config.gateway.telegram.adminUserIds.trim()
+                val safeTelegramAdminIds = trimmedTelegramAdminIds.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+                val isTelegramActive = config.gateway.telegram.enabled && safeTelegramToken.isNotBlank()
+
+                // 1. Sync .env (preserve all non-search, non-telegram variables)
                 val envFile = File(hermesDir, ".env")
                 val existingEnvLines = if (envFile.exists()) {
                     try {
@@ -209,7 +230,11 @@ data class ProcessConfig(
                             !trimmed.startsWith("BRAVE_API_KEY=") &&
                             !trimmed.startsWith("TAVILY_API_KEY=") &&
                             !trimmed.startsWith("FIRECRAWL_API_KEY=") &&
-                            !trimmed.startsWith("EXA_API_KEY=")
+                            !trimmed.startsWith("EXA_API_KEY=") &&
+                            !trimmed.startsWith("TELEGRAM_TOKEN=") &&
+                            !trimmed.startsWith("TELEGRAM_BOT_TOKEN=") &&
+                            !trimmed.startsWith("TELEGRAM_ALLOWED_USERS=") &&
+                            !trimmed.startsWith("TELEGRAM_ADMIN_IDS=")
                         }
                     } catch (_: Throwable) {
                         emptyList()
@@ -231,17 +256,30 @@ data class ProcessConfig(
                         "exa" -> updatedEnvLines.add("EXA_API_KEY=$safeKey")
                     }
                 }
-
-                val envTmp = File(hermesDir, ".env.tmp")
-                envTmp.writeText(updatedEnvLines.joinToString("\n") + if (updatedEnvLines.isNotEmpty()) "\n" else "", Charsets.UTF_8)
-                ConfigSerializer.applyPosix0600Permissions(envTmp)
-                if (!envTmp.renameTo(envFile)) {
-                    envTmp.copyTo(envFile, overwrite = true)
-                    envTmp.delete()
+                if (isTelegramActive) {
+                    updatedEnvLines.add("TELEGRAM_BOT_TOKEN=$safeTelegramToken")
+                    if (safeTelegramAdminIds.isNotBlank()) {
+                        updatedEnvLines.add("TELEGRAM_ALLOWED_USERS=$safeTelegramAdminIds")
+                        updatedEnvLines.add("TELEGRAM_ADMIN_IDS=$safeTelegramAdminIds")
+                    }
                 }
-                ConfigSerializer.applyPosix0600Permissions(envFile)
 
-                // 2. Sync config.yaml (preserve all non-search lines and sections)
+                val envTmp = File.createTempFile(".env_", ".tmp", hermesDir)
+                try {
+                    envTmp.writeText(updatedEnvLines.joinToString("\n") + if (updatedEnvLines.isNotEmpty()) "\n" else "", Charsets.UTF_8)
+                    ConfigSerializer.applyPosix0600Permissions(envTmp)
+                    if (!envTmp.renameTo(envFile)) {
+                        envTmp.copyTo(envFile, overwrite = true)
+                        envTmp.delete()
+                    }
+                    ConfigSerializer.applyPosix0600Permissions(envFile)
+                } finally {
+                    if (envTmp.exists()) {
+                        envTmp.delete()
+                    }
+                }
+
+                // 2. Sync config.yaml (preserve all non-search, non-telegram lines and sections)
                 val yamlFile = File(hermesDir, "config.yaml")
                 val searchKeys = setOf("search_provider:", "search_api_key:", "web_search:")
                 val existingYamlLines = if (yamlFile.exists()) {
@@ -249,17 +287,42 @@ data class ProcessConfig(
                         val lines = yamlFile.readLines(Charsets.UTF_8)
                         val filtered = mutableListOf<String>()
                         var skippingWebBlock = false
+                        var skippingTelegramBlock = false
+                        var skippingGatewaysBlock = false
                         for (line in lines) {
                             val trimmed = line.trim()
-                            if (trimmed == "web:" || trimmed.startsWith("web:")) {
+                            if (trimmed == "web:" || trimmed.startsWith("web:") || trimmed == "web :" || trimmed.startsWith("web :")) {
                                 skippingWebBlock = true
                                 continue
                             }
                             if (skippingWebBlock) {
-                                if (line.startsWith(" ") || line.startsWith("\t")) {
+                                if (line.isBlank() || line.startsWith(" ") || line.startsWith("\t")) {
                                     continue
                                 } else {
                                     skippingWebBlock = false
+                                }
+                            }
+                            if (trimmed == "telegram:" || trimmed.startsWith("telegram:") || trimmed == "telegram :" || trimmed.startsWith("telegram :")) {
+                                skippingTelegramBlock = true
+                                continue
+                            }
+                            if (skippingTelegramBlock) {
+                                if (line.isBlank() || line.startsWith(" ") || line.startsWith("\t")) {
+                                    continue
+                                } else {
+                                    skippingTelegramBlock = false
+                                }
+                            }
+                            if (trimmed == "gateways:" || trimmed.startsWith("gateways:") || trimmed == "gateways :" || trimmed.startsWith("gateways :") ||
+                                trimmed == "gateways.telegram:" || trimmed.startsWith("gateways.telegram:")) {
+                                skippingGatewaysBlock = true
+                                continue
+                            }
+                            if (skippingGatewaysBlock) {
+                                if (line.isBlank() || line.startsWith(" ") || line.startsWith("\t")) {
+                                    continue
+                                } else {
+                                    skippingGatewaysBlock = false
                                 }
                             }
                             if (searchKeys.any { trimmed.startsWith(it) }) {
@@ -277,6 +340,10 @@ data class ProcessConfig(
                 } else {
                     emptyList()
                 }
+
+                val parsedAdminIds = safeTelegramAdminIds.split(",", ";")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
 
                 val yamlContent = buildString {
                     if (existingYamlLines.isNotEmpty()) {
@@ -305,16 +372,59 @@ data class ProcessConfig(
                         appendLine("skills:")
                         appendLine("  web_search: ${config.skills.webSearch}")
                     }
+                    if (isTelegramActive) {
+                        appendLine("telegram:")
+                        appendLine("  enabled: true")
+                        appendLine("  bot_token: \"$safeTelegramToken\"")
+                        appendLine("  token: \"$safeTelegramToken\"")
+                        if (parsedAdminIds.isNotEmpty()) {
+                            appendLine("  allowed_users:")
+                            for (id in parsedAdminIds) {
+                                appendLine("    - \"$id\"")
+                            }
+                            appendLine("  admin_ids:")
+                            for (id in parsedAdminIds) {
+                                appendLine("    - \"$id\"")
+                            }
+                        }
+                        appendLine("gateways:")
+                        appendLine("  telegram:")
+                        appendLine("    enabled: true")
+                        appendLine("    bot_token: \"$safeTelegramToken\"")
+                        appendLine("    token: \"$safeTelegramToken\"")
+                        if (parsedAdminIds.isNotEmpty()) {
+                            appendLine("    allowed_users:")
+                            for (id in parsedAdminIds) {
+                                appendLine("      - \"$id\"")
+                            }
+                            appendLine("    admin_ids:")
+                            for (id in parsedAdminIds) {
+                                appendLine("      - \"$id\"")
+                            }
+                        }
+                    } else {
+                        appendLine("telegram:")
+                        appendLine("  enabled: false")
+                        appendLine("gateways:")
+                        appendLine("  telegram:")
+                        appendLine("    enabled: false")
+                    }
                 }
 
-                val yamlTmp = File(hermesDir, "config.yaml.tmp")
-                yamlTmp.writeText(yamlContent, Charsets.UTF_8)
-                ConfigSerializer.applyPosix0600Permissions(yamlTmp)
-                if (!yamlTmp.renameTo(yamlFile)) {
-                    yamlTmp.copyTo(yamlFile, overwrite = true)
-                    yamlTmp.delete()
+                val yamlTmp = File.createTempFile("config_", ".yaml.tmp", hermesDir)
+                try {
+                    yamlTmp.writeText(yamlContent, Charsets.UTF_8)
+                    ConfigSerializer.applyPosix0600Permissions(yamlTmp)
+                    if (!yamlTmp.renameTo(yamlFile)) {
+                        yamlTmp.copyTo(yamlFile, overwrite = true)
+                        yamlTmp.delete()
+                    }
+                    ConfigSerializer.applyPosix0600Permissions(yamlFile)
+                } finally {
+                    if (yamlTmp.exists()) {
+                        yamlTmp.delete()
+                    }
                 }
-                ConfigSerializer.applyPosix0600Permissions(yamlFile)
 
                 // Mirror to usr/root/.hermes for PRoot fake-root (-0) environments
                 try {
