@@ -69,6 +69,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -104,6 +105,7 @@ import com.hermes.node.ui.theme.HermesCyan
 import com.hermes.node.ui.theme.HermesCyanDark
 import com.hermes.node.ui.theme.StatusRunning
 import com.hermes.node.ui.theme.StatusStarting
+import com.hermes.node.viewmodel.PackageManagerStatus
 import com.hermes.node.viewmodel.ServerStatus
 import com.hermes.node.viewmodel.ServerUiState
 
@@ -146,6 +148,7 @@ fun SettingsScreen(
     onConfirmClearMemory: () -> Unit = {},
     onDismissMemoryActionMessage: () -> Unit = {},
     onUpdateSharedStorageEnabled: (Boolean) -> Unit = {},
+    onInstallPackageManager: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -727,6 +730,233 @@ fun SettingsScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Extended Linux Toolchain & Package Manager Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(12.dp),
+            border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkBorder))
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(
+                                color = if (state.packageManagerStatus == PackageManagerStatus.READY)
+                                    HermesCyan.copy(alpha = 0.15f)
+                                else DarkBorder.copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = if (state.packageManagerStatus == PackageManagerStatus.READY)
+                                    HermesCyan.copy(alpha = 0.5f)
+                                else DarkBorder,
+                                shape = RoundedCornerShape(8.dp)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Terminal,
+                            contentDescription = "Package Manager",
+                            tint = if (state.packageManagerStatus == PackageManagerStatus.READY)
+                                HermesCyan
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Extended Linux Toolchain & Package Manager",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = "Alpine apk package manager for installing native ARM64 Linux packages",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Status Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Status",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = when (state.packageManagerStatus) {
+                            PackageManagerStatus.READY -> StatusRunning.copy(alpha = 0.15f)
+                            PackageManagerStatus.DOWNLOADING, PackageManagerStatus.EXTRACTING -> StatusStarting.copy(alpha = 0.15f)
+                            PackageManagerStatus.ERROR -> MaterialTheme.colorScheme.errorContainer
+                            PackageManagerStatus.NOT_INSTALLED -> DarkBorder.copy(alpha = 0.5f)
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(
+                                        color = when (state.packageManagerStatus) {
+                                            PackageManagerStatus.READY -> StatusRunning
+                                            PackageManagerStatus.DOWNLOADING, PackageManagerStatus.EXTRACTING -> StatusStarting
+                                            PackageManagerStatus.ERROR -> MaterialTheme.colorScheme.error
+                                            PackageManagerStatus.NOT_INSTALLED -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        shape = CircleShape
+                                    )
+                            )
+                            Text(
+                                text = when (state.packageManagerStatus) {
+                                    PackageManagerStatus.READY -> "Ready"
+                                    PackageManagerStatus.DOWNLOADING -> "Downloading"
+                                    PackageManagerStatus.EXTRACTING -> "Extracting"
+                                    PackageManagerStatus.ERROR -> "Error"
+                                    PackageManagerStatus.NOT_INSTALLED -> "Not Installed"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = when (state.packageManagerStatus) {
+                                    PackageManagerStatus.READY -> StatusRunning
+                                    PackageManagerStatus.DOWNLOADING, PackageManagerStatus.EXTRACTING -> StatusStarting
+                                    PackageManagerStatus.ERROR -> MaterialTheme.colorScheme.error
+                                    PackageManagerStatus.NOT_INSTALLED -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Installed tools summary
+                if (state.installedToolsSummary.isNotBlank()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Installed Tools",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = state.installedToolsSummary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
+                }
+
+                // Progress indicator during download / extraction
+                if (state.packageManagerStatus == PackageManagerStatus.DOWNLOADING ||
+                    state.packageManagerStatus == PackageManagerStatus.EXTRACTING
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { state.packageManagerProgress },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = HermesCyan,
+                            trackColor = DarkBorder
+                        )
+                        state.packageManagerMessage?.let { msg ->
+                            Text(
+                                text = msg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // Error message
+                if (state.packageManagerStatus == PackageManagerStatus.ERROR && !state.packageManagerMessage.isNullOrBlank()) {
+                    Text(
+                        text = state.packageManagerMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                // Action button
+                val isBusy = state.packageManagerStatus == PackageManagerStatus.DOWNLOADING ||
+                        state.packageManagerStatus == PackageManagerStatus.EXTRACTING
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    if (state.packageManagerStatus == PackageManagerStatus.READY) {
+                        OutlinedButton(
+                            onClick = onInstallPackageManager,
+                            enabled = !isBusy,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = HermesCyan
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, HermesCyan)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Reinstall / Update")
+                        }
+                    } else {
+                        Button(
+                            onClick = onInstallPackageManager,
+                            enabled = !isBusy,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = HermesCyan,
+                                contentColor = DarkSurface
+                            )
+                        ) {
+                            if (isBusy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = DarkSurface
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    if (state.packageManagerStatus == PackageManagerStatus.DOWNLOADING)
+                                        "Downloading..."
+                                    else
+                                        "Extracting..."
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Install Package Manager")
                             }
                         }
                     }

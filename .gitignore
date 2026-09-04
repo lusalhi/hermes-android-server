@@ -18,6 +18,7 @@ _bmad-output/*
 *.aab
 build/
 */build/
+.kotlin/
 
 # Node / JS
 node_modules/

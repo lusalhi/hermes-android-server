@@ -12,6 +12,7 @@ import com.hermes.node.data.model.SkillsConfig
 import com.hermes.node.data.model.SystemConfig
 import com.hermes.node.engine.DeviceTelemetry
 import com.hermes.node.engine.MemoryManagerInterface
+import com.hermes.node.engine.PackageManagerInstaller
 import com.hermes.node.engine.TelemetryCollector
 import com.hermes.node.engine.TunnelManagerInterface
 import com.hermes.node.engine.TunnelState
@@ -2803,6 +2804,185 @@ class ServerViewModelTest {
         )
 
         vm.stopMonitoring()
+    }
+
+    @Test
+    fun packageManagerStatus_initialState_isNotInstalled() {
+        val fakeInstaller = FakePackageManagerInstaller(File("/tmp"), installed = false)
+        val vm = ServerViewModel(
+            packageManagerInstaller = fakeInstaller,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        assertEquals(PackageManagerStatus.NOT_INSTALLED, vm.uiState.value.packageManagerStatus)
+        assertEquals(0f, vm.uiState.value.packageManagerProgress, 0.001f)
+        assertNull(vm.uiState.value.packageManagerMessage)
+        assertEquals("apt/apt-get shim (minimal)", vm.uiState.value.installedToolsSummary)
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun refreshPackageManagerStatus_whenInstalled_transitionsToReady() {
+        val fakeInstaller = FakePackageManagerInstaller(File("/tmp"), installed = false)
+        val vm = ServerViewModel(
+            packageManagerInstaller = fakeInstaller,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+        assertEquals(PackageManagerStatus.NOT_INSTALLED, vm.uiState.value.packageManagerStatus)
+
+        fakeInstaller.installed = true
+        vm.refreshPackageManagerStatus()
+
+        assertEquals(PackageManagerStatus.READY, vm.uiState.value.packageManagerStatus)
+        assertEquals(1.0f, vm.uiState.value.packageManagerProgress, 0.001f)
+        assertTrue(vm.uiState.value.installedToolsSummary.contains("apk"))
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun installPackageManager_successFlow_transitionsToReady() = runTest(testDispatcher) {
+        val fakeInstaller = FakePackageManagerInstaller(File("/tmp"), installed = false, delayMs = 100L)
+        val vm = ServerViewModel(
+            packageManagerInstaller = fakeInstaller,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.installPackageManager("https://example.com/apk.tar.gz")
+        assertEquals(PackageManagerStatus.DOWNLOADING, vm.uiState.value.packageManagerStatus)
+
+        advanceTimeBy(120)
+        assertEquals(PackageManagerStatus.DOWNLOADING, vm.uiState.value.packageManagerStatus)
+
+        advanceTimeBy(120)
+        advanceUntilIdle()
+
+        assertEquals(PackageManagerStatus.READY, vm.uiState.value.packageManagerStatus)
+        assertEquals(1.0f, vm.uiState.value.packageManagerProgress, 0.001f)
+        assertTrue(vm.uiState.value.installedToolsSummary.contains("apk"))
+        assertEquals("https://example.com/apk.tar.gz", fakeInstaller.lastUrl)
+        assertTrue(vm.uiState.value.logs.any { it.message.contains("installed successfully") })
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun installPackageManager_networkError_transitionsToErrorState() = runTest(testDispatcher) {
+        val fakeInstaller = FakePackageManagerInstaller(
+            File("/tmp"),
+            installed = false,
+            downloadResult = Result.failure(java.io.IOException("Connection timed out"))
+        )
+        val vm = ServerViewModel(
+            packageManagerInstaller = fakeInstaller,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.installPackageManager()
+        advanceUntilIdle()
+
+        assertEquals(PackageManagerStatus.ERROR, vm.uiState.value.packageManagerStatus)
+        assertEquals(0f, vm.uiState.value.packageManagerProgress, 0.001f)
+        assertTrue(vm.uiState.value.packageManagerMessage?.contains("Connection timed out") == true)
+        assertTrue(vm.uiState.value.logs.any { it.message.contains("Connection timed out") })
+
+        // Verify refreshPackageManagerStatus does not clear error state or message
+        vm.refreshPackageManagerStatus()
+        assertEquals(PackageManagerStatus.ERROR, vm.uiState.value.packageManagerStatus)
+        assertEquals(0f, vm.uiState.value.packageManagerProgress, 0.001f)
+        assertTrue(vm.uiState.value.packageManagerMessage?.contains("Connection timed out") == true)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun installPackageManagerFromStream_successFlow_transitionsToReady() = runTest(testDispatcher) {
+        val fakeInstaller = FakePackageManagerInstaller(File("/tmp"), installed = false)
+        val vm = ServerViewModel(
+            packageManagerInstaller = fakeInstaller,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        val inStream = ByteArray(10).inputStream()
+        vm.installPackageManagerFromStream(inStream)
+        advanceUntilIdle()
+
+        assertEquals(PackageManagerStatus.READY, vm.uiState.value.packageManagerStatus)
+        assertEquals(1.0f, vm.uiState.value.packageManagerProgress, 0.001f)
+        assertEquals(1, fakeInstaller.installFromStreamCalls)
+
+        vm.stopMonitoring()
+    }
+
+    @Test
+    fun cancelPackageManagerInstallation_cancelsJobAndRefreshesStatus() = runTest(testDispatcher) {
+        val fakeInstaller = FakePackageManagerInstaller(File("/tmp"), installed = false, delayMs = 1000L)
+        val vm = ServerViewModel(
+            packageManagerInstaller = fakeInstaller,
+            defaultDispatcher = testDispatcher,
+            ioDispatcher = testDispatcher
+        )
+
+        vm.installPackageManager()
+        assertEquals(PackageManagerStatus.DOWNLOADING, vm.uiState.value.packageManagerStatus)
+
+        vm.cancelPackageManagerInstallation()
+        advanceUntilIdle()
+
+        assertEquals(PackageManagerStatus.NOT_INSTALLED, vm.uiState.value.packageManagerStatus)
+
+        vm.stopMonitoring()
+    }
+
+    private class FakePackageManagerInstaller(
+        tempDir: File,
+        var installed: Boolean = false,
+        var downloadResult: Result<Int> = Result.success(42),
+        var streamResult: Result<Int> = Result.success(42),
+        var delayMs: Long = 0L
+    ) : PackageManagerInstaller(tempDir) {
+        var isInstalledCalls = 0
+        var downloadAndInstallCalls = 0
+        var installFromStreamCalls = 0
+        var lastUrl: String? = null
+
+        override fun isPackageManagerInstalled(): Boolean {
+            isInstalledCalls++
+            return installed
+        }
+
+        override suspend fun downloadAndInstall(
+            url: String,
+            onProgress: ((progress: Float, message: String) -> Unit)?
+        ): Result<Int> {
+            downloadAndInstallCalls++
+            lastUrl = url
+            if (delayMs > 0) kotlinx.coroutines.delay(delayMs)
+            onProgress?.invoke(0.25f, "Downloading mock...")
+            if (delayMs > 0) kotlinx.coroutines.delay(delayMs)
+            onProgress?.invoke(0.75f, "Extracting mock...")
+            if (downloadResult.isSuccess) {
+                installed = true
+            }
+            return downloadResult
+        }
+
+        override suspend fun installFromStream(
+            inputStream: java.io.InputStream,
+            onProgress: ((progress: Float, message: String) -> Unit)?
+        ): Result<Int> {
+            installFromStreamCalls++
+            if (delayMs > 0) kotlinx.coroutines.delay(delayMs)
+            onProgress?.invoke(0.50f, "Extracting stream mock...")
+            if (streamResult.isSuccess) {
+                installed = true
+            }
+            return streamResult
+        }
     }
 
     private class FakeMemoryManager(

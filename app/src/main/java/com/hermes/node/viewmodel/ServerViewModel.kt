@@ -17,6 +17,7 @@ import com.hermes.node.data.model.WhatsAppGatewayConfig
 import com.hermes.node.engine.BootstrapExtractor
 import com.hermes.node.engine.ExtractionResult
 import com.hermes.node.engine.HealthCheckResult
+import com.hermes.node.engine.PackageManagerInstaller
 import android.content.Context
 import android.content.Intent
 import com.hermes.node.engine.MemoryManager
@@ -66,7 +67,8 @@ class ServerViewModel(
     private val telemetryCollector: TelemetryCollector? = null,
     private val telemetryMonitor: TelemetryMonitor? = null,
     private val tunnelManager: TunnelManagerInterface? = null,
-    private val memoryManager: MemoryManagerInterface? = null
+    private val memoryManager: MemoryManagerInterface? = null,
+    private val packageManagerInstaller: PackageManagerInstaller? = null
 ) : ViewModel() {
 
     private val context: Context? = try {
@@ -99,6 +101,10 @@ class ServerViewModel(
             null
         }
     })
+    private val effectiveInstaller: PackageManagerInstaller? = packageManagerInstaller ?: run {
+        val fDir = bootstrapExtractor?.filesDir ?: this.context?.filesDir
+        fDir?.let { PackageManagerInstaller(filesDir = it, ioDispatcher = ioDispatcher) }
+    }
 
     private var metricsJob: Job? = null
     private var telemetryJob: Job? = null
@@ -111,6 +117,7 @@ class ServerViewModel(
     private var tunnelObserverJob: Job? = null
     private var tunnelControlJob: Job? = null
     private var memoryJob: Job? = null
+    private var packageManagerJob: Job? = null
     private val maxLogCapacity = 2000
 
     init {
@@ -120,6 +127,7 @@ class ServerViewModel(
         // Initial welcome log
         onAddLog("Hermes Node initialized. Ready to start.", LogLevel.INFO)
         checkAndInitializeBootstrap()
+        refreshPackageManagerStatus()
         observeServiceState()
         observeProcessState()
         observeTunnelState()
@@ -140,6 +148,7 @@ class ServerViewModel(
                     bootstrapMessage = "ARM64 Linux userland ready"
                 )
             }
+            refreshPackageManagerStatus()
             return HealthCheckResult.Healthy
         }
 
@@ -184,6 +193,7 @@ class ServerViewModel(
                 onAddLog("Runtime integrity check failed: ${health.details}", LogLevel.WARN)
             }
         }
+        refreshPackageManagerStatus()
         return health
     }
 
@@ -1304,6 +1314,8 @@ class ServerViewModel(
         metricsJob = null
         telemetryJob?.cancel()
         telemetryJob = null
+        packageManagerJob?.cancel()
+        packageManagerJob = null
         tunnelObserverJob?.cancel()
         tunnelObserverJob = null
         val managerToStop = effectiveTunnelManager
@@ -1654,6 +1666,215 @@ class ServerViewModel(
 
     fun onDismissMemoryActionMessage() {
         _uiState.update { it.copy(memoryActionMessage = null) }
+    }
+
+    fun refreshPackageManagerStatus() {
+        val installer = effectiveInstaller
+        val isInstalled = installer?.isPackageManagerInstalled() == true ||
+                bootstrapExtractor?.isPackageManagerInstalled() == true
+
+        _uiState.update { current ->
+            if (isInstalled) {
+                current.copy(
+                    packageManagerStatus = PackageManagerStatus.READY,
+                    packageManagerProgress = 1.0f,
+                    packageManagerMessage = "Alpine apk package manager ready",
+                    installedToolsSummary = "apk (Alpine v3.20), apt/apt-get shim, python3, proot"
+                )
+            } else if (current.packageManagerStatus != PackageManagerStatus.DOWNLOADING &&
+                current.packageManagerStatus != PackageManagerStatus.EXTRACTING &&
+                current.packageManagerStatus != PackageManagerStatus.ERROR
+            ) {
+                current.copy(
+                    packageManagerStatus = PackageManagerStatus.NOT_INSTALLED,
+                    packageManagerProgress = 0f,
+                    packageManagerMessage = null,
+                    installedToolsSummary = "apt/apt-get shim (minimal)"
+                )
+            } else {
+                current
+            }
+        }
+    }
+
+    fun installPackageManager(url: String? = null) {
+        val installer = effectiveInstaller
+        if (installer == null) {
+            _uiState.update {
+                it.copy(
+                    packageManagerStatus = PackageManagerStatus.ERROR,
+                    packageManagerMessage = "Package manager installer not available"
+                )
+            }
+            onAddLog("Package manager installation failed: installer not available", LogLevel.ERROR)
+            return
+        }
+
+        packageManagerJob?.cancel()
+        _uiState.update {
+            it.copy(
+                packageManagerStatus = PackageManagerStatus.DOWNLOADING,
+                packageManagerProgress = 0.05f,
+                packageManagerMessage = "Starting package manager download...",
+                errorMessage = null
+            )
+        }
+        onAddLog("Starting package manager download and installation...", LogLevel.INFO)
+
+        packageManagerJob = viewModelScope.launch(ioDispatcher) {
+            try {
+                val targetUrl = url ?: PackageManagerInstaller.DEFAULT_PACKAGE_MANAGER_URL
+                val result = installer.downloadAndInstall(targetUrl) { progress, message ->
+                    val status = if (progress < 0.50f) PackageManagerStatus.DOWNLOADING else PackageManagerStatus.EXTRACTING
+                    _uiState.update {
+                        it.copy(
+                            packageManagerStatus = status,
+                            packageManagerProgress = progress,
+                            packageManagerMessage = message
+                        )
+                    }
+                }
+
+                result.fold(
+                    onSuccess = { count ->
+                        _uiState.update {
+                            it.copy(
+                                packageManagerStatus = PackageManagerStatus.READY,
+                                packageManagerProgress = 1.0f,
+                                packageManagerMessage = "Package manager installed successfully ($count files)",
+                                installedToolsSummary = "apk (Alpine v3.20), apt/apt-get shim, python3, proot"
+                            )
+                        }
+                        onAddLog("Package manager installed successfully ($count files extracted).", LogLevel.INFO)
+                    },
+                    onFailure = { e ->
+                        if (e is CancellationException) throw e
+                        val errMsg = e.message ?: "Failed to install package manager"
+                        _uiState.update {
+                            it.copy(
+                                packageManagerStatus = PackageManagerStatus.ERROR,
+                                packageManagerMessage = errMsg,
+                                packageManagerProgress = 0f
+                            )
+                        }
+                        onAddLog("Package manager installation failed: $errMsg", LogLevel.ERROR)
+                    }
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                val errMsg = e.message ?: "Unexpected error during package manager installation"
+                _uiState.update {
+                    it.copy(
+                        packageManagerStatus = PackageManagerStatus.ERROR,
+                        packageManagerMessage = errMsg,
+                        packageManagerProgress = 0f
+                    )
+                }
+                onAddLog("Package manager installation error: $errMsg", LogLevel.ERROR)
+            }
+        }
+    }
+
+    fun installPackageManagerFromStream(inputStream: java.io.InputStream) {
+        val installer = effectiveInstaller
+        if (installer == null) {
+            _uiState.update {
+                it.copy(
+                    packageManagerStatus = PackageManagerStatus.ERROR,
+                    packageManagerMessage = "Package manager installer not available"
+                )
+            }
+            onAddLog("Package manager installation failed: installer not available", LogLevel.ERROR)
+            return
+        }
+
+        packageManagerJob?.cancel()
+        _uiState.update {
+            it.copy(
+                packageManagerStatus = PackageManagerStatus.EXTRACTING,
+                packageManagerProgress = 0.10f,
+                packageManagerMessage = "Extracting package manager archive...",
+                errorMessage = null
+            )
+        }
+        onAddLog("Starting package manager stream extraction...", LogLevel.INFO)
+
+        packageManagerJob = viewModelScope.launch(ioDispatcher) {
+            try {
+                val result = installer.installFromStream(inputStream) { progress, message ->
+                    _uiState.update {
+                        it.copy(
+                            packageManagerStatus = PackageManagerStatus.EXTRACTING,
+                            packageManagerProgress = progress,
+                            packageManagerMessage = message
+                        )
+                    }
+                }
+
+                result.fold(
+                    onSuccess = { count ->
+                        _uiState.update {
+                            it.copy(
+                                packageManagerStatus = PackageManagerStatus.READY,
+                                packageManagerProgress = 1.0f,
+                                packageManagerMessage = "Package manager installed successfully ($count files)",
+                                installedToolsSummary = "apk (Alpine v3.20), apt/apt-get shim, python3, proot"
+                            )
+                        }
+                        onAddLog("Package manager installed successfully ($count files extracted).", LogLevel.INFO)
+                    },
+                    onFailure = { e ->
+                        if (e is CancellationException) throw e
+                        val errMsg = e.message ?: "Failed to extract package manager"
+                        _uiState.update {
+                            it.copy(
+                                packageManagerStatus = PackageManagerStatus.ERROR,
+                                packageManagerMessage = errMsg,
+                                packageManagerProgress = 0f
+                            )
+                        }
+                        onAddLog("Package manager extraction failed: $errMsg", LogLevel.ERROR)
+                    }
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                val errMsg = e.message ?: "Unexpected error during package manager extraction"
+                _uiState.update {
+                    it.copy(
+                        packageManagerStatus = PackageManagerStatus.ERROR,
+                        packageManagerMessage = errMsg,
+                        packageManagerProgress = 0f
+                    )
+                }
+                onAddLog("Package manager extraction error: $errMsg", LogLevel.ERROR)
+            }
+        }
+    }
+
+    fun cancelPackageManagerInstallation() {
+        packageManagerJob?.cancel()
+        packageManagerJob = null
+        val isInstalled = effectiveInstaller?.isPackageManagerInstalled() == true ||
+                bootstrapExtractor?.isPackageManagerInstalled() == true
+        _uiState.update { current ->
+            if (isInstalled) {
+                current.copy(
+                    packageManagerStatus = PackageManagerStatus.READY,
+                    packageManagerProgress = 1.0f,
+                    packageManagerMessage = "Alpine apk package manager ready",
+                    installedToolsSummary = "apk (Alpine v3.20), apt/apt-get shim, python3, proot"
+                )
+            } else {
+                current.copy(
+                    packageManagerStatus = PackageManagerStatus.NOT_INSTALLED,
+                    packageManagerProgress = 0f,
+                    packageManagerMessage = null,
+                    installedToolsSummary = "apt/apt-get shim (minimal)"
+                )
+            }
+        }
     }
 
     override fun onCleared() {

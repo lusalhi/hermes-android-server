@@ -36,6 +36,7 @@ import com.hermes.node.data.ConfigSerializer
 import com.hermes.node.data.EncryptedConfigRepository
 import com.hermes.node.engine.BootstrapExtractor
 import com.hermes.node.engine.MemoryManager
+import com.hermes.node.engine.PackageManagerInstaller
 import com.hermes.node.engine.SystemTelemetryCollector
 import com.hermes.node.service.HermesServerService
 import java.io.File
@@ -50,6 +51,7 @@ fun HermesApp(
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 val appCtx = context.applicationContext
                 val extractor = BootstrapExtractor(appCtx)
+                val packageManagerInstaller = PackageManagerInstaller(appCtx)
                 val configRepository = EncryptedConfigRepository.create(appCtx)
                 val configSerializer = ConfigSerializer(File(appCtx.filesDir, "hermes.json"))
                 val telemetryCollector = SystemTelemetryCollector(appCtx)
@@ -57,6 +59,7 @@ fun HermesApp(
                 return ServerViewModel(
                     context = appCtx,
                     bootstrapExtractor = extractor,
+                    packageManagerInstaller = packageManagerInstaller,
                     configRepository = configRepository,
                     configSerializer = configSerializer,
                     serviceRunningFlow = HermesServerService.isRunning,
@@ -174,7 +177,8 @@ fun HermesApp(
                     onDismissClearMemoryDialog = viewModel::onDismissClearMemoryDialog,
                     onConfirmClearMemory = viewModel::onConfirmClearMemory,
                     onDismissMemoryActionMessage = viewModel::onDismissMemoryActionMessage,
-                    onUpdateSharedStorageEnabled = viewModel::setSharedStorageEnabled
+                    onUpdateSharedStorageEnabled = viewModel::setSharedStorageEnabled,
+                    onInstallPackageManager = viewModel::installPackageManager
                 )
             }
         }

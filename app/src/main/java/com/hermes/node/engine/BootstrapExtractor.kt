@@ -277,6 +277,23 @@ fi
                     issues.add("Mirror toolchain shim is not executable: usr/bin/${shimFile.name}")
                 }
             }
+
+            // 5. Extended package manager detection & self-healing
+            val binApk = File(usrDir, "bin/apk")
+            val usrBinApk = File(usrDir, "usr/bin/apk")
+            if (binApk.exists() && !binApk.canExecute()) {
+                binApk.setExecutable(true, false)
+            }
+            if (usrBinApk.exists() && !usrBinApk.canExecute()) {
+                usrBinApk.setExecutable(true, false)
+            }
+            if (isPackageManagerInstalled()) {
+                val resolvConf = File(usrDir, "etc/resolv.conf")
+                val reposFile = File(usrDir, "etc/apk/repositories")
+                if (!resolvConf.exists() || !reposFile.exists()) {
+                    ensureNetworkConfig(usrDir)
+                }
+            }
         }
 
         return if (issues.isEmpty()) {
@@ -284,6 +301,49 @@ fi
         } else {
             HealthCheckResult.Corrupted(issues = issues, details = issues.joinToString("; "))
         }
+    }
+
+    /**
+     * Configures DNS resolution (/etc/resolv.conf) and Alpine Linux package manager repositories (/etc/apk/repositories).
+     */
+    open fun ensureNetworkConfig(targetDir: File = usrDir): Boolean {
+        return try {
+            val etcDir = File(targetDir, "etc")
+            if (!etcDir.exists()) {
+                etcDir.mkdirs()
+            }
+            val resolvConf = File(etcDir, "resolv.conf")
+            resolvConf.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n", Charsets.UTF_8)
+            resolvConf.setReadable(true, false)
+            resolvConf.setWritable(true, true)
+
+            val apkDir = File(etcDir, "apk")
+            if (!apkDir.exists()) {
+                apkDir.mkdirs()
+            }
+            val reposFile = File(apkDir, "repositories")
+            reposFile.writeText(
+                "https://dl-cdn.alpinelinux.org/alpine/v3.20/main\nhttps://dl-cdn.alpinelinux.org/alpine/v3.20/community\n",
+                Charsets.UTF_8
+            )
+            reposFile.setReadable(true, false)
+            reposFile.setWritable(true, true)
+            true
+        } catch (e: Throwable) {
+            try {
+                Log.w("BootstrapExtractor", "Failed to ensure network config: ${e.message}")
+            } catch (_: Throwable) {}
+            false
+        }
+    }
+
+    /**
+     * Checks if extended package manager (apk) is installed and executable in userland.
+     */
+    open fun isPackageManagerInstalled(): Boolean {
+        val binApk = File(usrDir, "bin/apk")
+        val usrBinApk = File(usrDir, "usr/bin/apk")
+        return (binApk.exists() && binApk.canExecute()) || (usrBinApk.exists() && usrBinApk.canExecute())
     }
 
     /**

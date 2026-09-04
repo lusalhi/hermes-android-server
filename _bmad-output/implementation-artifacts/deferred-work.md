@@ -52,3 +52,10 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-6-4-agent-toolchain-shims-and-storage-bridge.md`
   summary: Display runtime restart prompt when changing shared storage setting while daemon is active
   evidence: PRoot bind mounts require daemon restart; surfaced during review of Story 6.4.
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-5-full-package-manager-and-dynamic-rootfs-extraction.md`
+  summary: Query dynamic installed packages list via apk info in UI instead of static tools summary
+  evidence: Surfaced by Blind Hunter during review of Story 6.5.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-5-full-package-manager-and-dynamic-rootfs-extraction.md`
+  summary: Resolve DNS servers dynamically via Android ConnectivityManager in resolv.conf
+  evidence: Surfaced by Blind Hunter during review of Story 6.5.

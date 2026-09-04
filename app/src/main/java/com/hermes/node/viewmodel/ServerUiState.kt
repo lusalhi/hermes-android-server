@@ -80,6 +80,18 @@ data class ServerUiState(
     val memoryActionMessage: String? = null,
     val isMemoryActionSuccess: Boolean = false,
     val showClearMemoryDialog: Boolean = false,
-    val searchApiKeyVisible: Boolean = false
+    val searchApiKeyVisible: Boolean = false,
+    val packageManagerStatus: PackageManagerStatus = PackageManagerStatus.NOT_INSTALLED,
+    val packageManagerProgress: Float = 0f,
+    val packageManagerMessage: String? = null,
+    val installedToolsSummary: String = "apt/apt-get shim (minimal)"
 )
+
+enum class PackageManagerStatus {
+    NOT_INSTALLED,
+    DOWNLOADING,
+    EXTRACTING,
+    READY,
+    ERROR
+}
 
