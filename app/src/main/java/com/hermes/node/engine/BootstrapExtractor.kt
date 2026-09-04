@@ -50,7 +50,7 @@ open class BootstrapExtractor(
         const val BOOTSTRAP_ASSET_NAME = "bootstrap-arm64.tar.xz"
         const val MARKER_FILE_NAME = ".bootstrap_complete"
         const val USR_DIR_NAME = "usr"
-        const val BOOTSTRAP_VERSION = 4
+        const val BOOTSTRAP_VERSION = 5
         private const val MIN_REQUIRED_DISK_BYTES = 20L * 1024 * 1024 // 20 MB
 
         val CRITICAL_BINARIES = listOf(
@@ -140,22 +140,23 @@ fi
         )
 
         val HERMES_LAUNCHER_SCRIPT = """#!/bin/sh
-# /usr/bin/hermes launcher with Android W^X permission workaround
+# /usr/bin/hermes launcher with Android userland & PRoot support
 
 DIR="${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)"
 USR_DIR="${'$'}(cd "${'$'}DIR/.." && pwd)"
 
 if [ -d "/usr/lib/python3.12" ]; then
     export PYTHONHOME="/usr"
-elif [ -d "${'$'}USR_DIR/lib/python3.12" ]; then
-    export PYTHONHOME="${'$'}USR_DIR"
 elif [ -d "${'$'}USR_DIR/usr/lib/python3.12" ]; then
     export PYTHONHOME="${'$'}USR_DIR/usr"
+elif [ -d "${'$'}USR_DIR/lib/python3.12" ]; then
+    export PYTHONHOME="${'$'}USR_DIR"
 fi
 
-export PYTHONPATH="/usr/lib/python3.12/site-packages:/usr/lib/python3.11/site-packages:${'$'}USR_DIR/lib/python3.12/site-packages:${'$'}USR_DIR/usr/lib/python3.12/site-packages:${'$'}PYTHONPATH"
+export PYTHONPATH="/usr/lib/python3.12/site-packages:/usr/lib/python3.12/lib-dynload:${'$'}USR_DIR/usr/lib/python3.12/site-packages:${'$'}USR_DIR/usr/lib/python3.12/lib-dynload:${'$'}USR_DIR/lib/python3.12/site-packages:${'$'}PYTHONPATH"
 export LD_LIBRARY_PATH="/lib:/usr/lib:${'$'}USR_DIR/lib:${'$'}USR_DIR/usr/lib:${'$'}LD_LIBRARY_PATH"
 export PATH="/bin:/usr/bin:/sbin:/usr/sbin:${'$'}USR_DIR/bin:${'$'}USR_DIR/usr/bin:${'$'}PATH"
+export PYTHONUNBUFFERED="1"
 
 PYTHON_BIN=""
 if [ -f "${'$'}DIR/python3" ]; then
@@ -172,30 +173,13 @@ elif command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="${'$'}(command -v python3)"
 fi
 
-SH_BIN="/system/bin/sh"
-if [ ! -x "${'$'}SH_BIN" ]; then
-    SH_BIN="/bin/sh"
+if [ -f "/lib/ld-musl-aarch64.so.1" ]; then
+    exec "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
+elif [ -f "${'$'}USR_DIR/lib/ld-musl-aarch64.so.1" ]; then
+    exec "${'$'}USR_DIR/lib/ld-musl-aarch64.so.1" --library-path "${'$'}USR_DIR/lib:${'$'}USR_DIR/usr/lib" "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
+else
+    exec python3 -m hermes "${'$'}@"
 fi
-
-if [ -n "${'$'}PYTHON_BIN" ] && [ -f "${'$'}PYTHON_BIN" ]; then
-    chmod +x "${'$'}PYTHON_BIN" 2>/dev/null || true
-    first_line=""
-    read -r first_line < "${'$'}PYTHON_BIN" 2>/dev/null || true
-    case "${'$'}first_line" in
-        \#\!*)
-            exec "${'$'}SH_BIN" "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
-            ;;
-        *)
-            if [ -f "/lib/ld-musl-aarch64.so.1" ] || [ ! -x "/system/bin/linker64" ]; then
-                exec "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
-            else
-                exec /system/bin/linker64 "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
-            fi
-            ;;
-    esac
-fi
-
-exec python3 -m hermes "${'$'}@"
 """
     }
 
@@ -791,6 +775,23 @@ exec python3 -m hermes "${'$'}@"
                     file.setExecutable(true, false)
                 }
             }
+        }
+
+        // Guarantee bin/sh and usr/bin/sh exist as physical executable binaries
+        val binBusybox = File(dir, "bin/busybox")
+        val binSh = File(dir, "bin/sh")
+        if (binBusybox.exists() && (!binSh.exists() || binSh.length() == 0L)) {
+            try {
+                binSh.delete()
+                binBusybox.copyTo(binSh, overwrite = true)
+            } catch (_: Throwable) {}
+        }
+        val usrBinSh = File(dir, "usr/bin/sh")
+        if (binBusybox.exists() && (!usrBinSh.exists() || usrBinSh.length() == 0L)) {
+            try {
+                usrBinSh.delete()
+                binBusybox.copyTo(usrBinSh, overwrite = true)
+            } catch (_: Throwable) {}
         }
 
         // Explicitly guarantee dynamic linker and critical binaries are executable

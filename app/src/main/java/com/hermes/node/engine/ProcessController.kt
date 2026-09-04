@@ -114,17 +114,20 @@ data class ProcessConfig(
                 }
             }
 
+            val muslLinker = File(usrDir, "lib/ld-musl-aarch64.so.1")
+
             val env = mutableMapOf(
                 "HOME" to filesDir.absolutePath,
                 "PREFIX" to usrDir.absolutePath,
-                "PATH" to "${usrDir.absolutePath}/bin:${usrDir.absolutePath}/sbin:${usrDir.absolutePath}/usr/bin:${usrDir.absolutePath}/usr/sbin:/system/bin:/system/xbin",
+                "PATH" to "/bin:/usr/bin:/sbin:/usr/sbin:${usrDir.absolutePath}/bin:${usrDir.absolutePath}/usr/bin:/system/bin:/system/xbin",
                 "TMPDIR" to tmpDir.absolutePath,
-                "PYTHONHOME" to usrDir.absolutePath,
-                "PYTHONPATH" to "${usrDir.absolutePath}/lib/python3.12/site-packages:${usrDir.absolutePath}/lib/python3.11/site-packages:${usrDir.absolutePath}/usr/lib/python3.12/site-packages:${usrDir.absolutePath}/usr/lib/python3.11/site-packages",
+                "PYTHONHOME" to "/usr",
+                "PYTHONPATH" to "/usr/lib/python3.12/site-packages:/usr/lib/python3.11/site-packages:/usr/lib/python3.12/lib-dynload:${usrDir.absolutePath}/usr/lib/python3.12/site-packages:${usrDir.absolutePath}/usr/lib/python3.11/site-packages:${usrDir.absolutePath}/usr/lib/python3.12/lib-dynload:${usrDir.absolutePath}/lib/python3.12/site-packages",
                 "LD_LIBRARY_PATH" to "${usrDir.absolutePath}/lib:${usrDir.absolutePath}/usr/lib",
                 "PROOT_LOADER" to "${usrDir.absolutePath}/libexec/proot/loader",
                 "PROOT_TMP_DIR" to tmpDir.absolutePath,
                 "PROOT_NO_SECCOMP" to "1",
+                "PYTHONUNBUFFERED" to "1",
                 "HERMES_CONFIG_PATH" to configFile
             )
 
@@ -166,44 +169,33 @@ data class ProcessConfig(
             syncHermesConfig(filesDir, effectiveConfig)
 
             val useProot = File(prootBin).exists() && File(prootBin).canExecute()
-            val executable = if (useProot) prootBin else if (File(hermesBin).exists()) hermesBin else pythonBin
+            val executable = if (useProot) {
+                prootBin
+            } else if (muslLinker.exists() && muslLinker.canExecute()) {
+                muslLinker.absolutePath
+            } else if (File(hermesBin).exists()) {
+                hermesBin
+            } else {
+                pythonBin
+            }
             val arguments = if (useProot) {
                 val canonicalFilesDir = try { filesDir.canonicalFile } catch (_: Throwable) { filesDir }
-                val pkgName = filesDir.parentFile?.name ?: "com.hermes.node"
 
                 val prootArgs = mutableListOf(
                     "-r", usrDir.absolutePath,
                     "-0",
+                    "--kill-on-exit",
+                    "--link2symlink",
                     "-b", "/dev",
                     "-b", "/proc",
-                    "-b", filesDir.absolutePath
+                    "-b", "/sys",
+                    "-b", "/dev/urandom:/dev/random",
+                    "-b", "${filesDir.absolutePath}:${filesDir.absolutePath}",
+                    "-b", "${tmpDir.absolutePath}:/tmp"
                 )
                 if (canonicalFilesDir.absolutePath != filesDir.absolutePath) {
                     prootArgs.add("-b")
-                    prootArgs.add(canonicalFilesDir.absolutePath)
-                }
-                // Bind standard Android app storage aliases so PRoot realpath lookups never fail
-                prootArgs.add("-b")
-                prootArgs.add("${filesDir.absolutePath}:/data/data/$pkgName/files")
-                prootArgs.add("-b")
-                prootArgs.add("${filesDir.absolutePath}:/data/user/0/$pkgName/files")
-
-                // Ensure tmp directories exist and bind /tmp inside chroot
-                val canonicalTmpDir = try { tmpDir.canonicalFile } catch (_: Throwable) { tmpDir }
-                canonicalTmpDir.mkdirs()
-                canonicalTmpDir.setReadable(true, false)
-                canonicalTmpDir.setWritable(true, false)
-                canonicalTmpDir.setExecutable(true, false)
-                tmpDir.mkdirs()
-                tmpDir.setReadable(true, false)
-                tmpDir.setWritable(true, false)
-                tmpDir.setExecutable(true, false)
-                File(usrDir, "tmp").mkdirs()
-                prootArgs.add("-b")
-                prootArgs.add("${tmpDir.absolutePath}:/tmp")
-                if (canonicalTmpDir.absolutePath != tmpDir.absolutePath) {
-                    prootArgs.add("-b")
-                    prootArgs.add(canonicalTmpDir.absolutePath)
+                    prootArgs.add("${canonicalFilesDir.absolutePath}:${canonicalFilesDir.absolutePath}")
                 }
 
                 if (effectiveConfig.skills.sharedStorageEnabled) {
@@ -222,15 +214,23 @@ data class ProcessConfig(
                     }
                 }
                 val hermesCmd = if (File(usrDir, "bin/hermes").exists()) "/bin/hermes" else hermesBin
+                val busyboxCmd = if (File(usrDir, "bin/busybox").exists()) "/bin/busybox" else "busybox"
                 prootArgs.addAll(
                     listOf(
                         "-w", filesDir.absolutePath,
-                        "/bin/sh",
+                        busyboxCmd,
+                        "sh",
                         hermesCmd,
                         "gateway", "run"
                     )
                 )
                 prootArgs
+            } else if (muslLinker.exists() && muslLinker.canExecute()) {
+                listOf(
+                    "--library-path", "${usrDir.absolutePath}/lib:${usrDir.absolutePath}/usr/lib",
+                    pythonBin,
+                    "-m", "hermes", "gateway", "run"
+                )
             } else if (File(hermesBin).exists()) {
                 listOf("gateway", "run")
             } else {
@@ -538,23 +538,24 @@ class DefaultProcessRunner : ProcessRunner {
 
             val isAndroid = File("/system/bin/sh").exists()
             if (isAndroid) {
-                // On Android 10+ (API 29+), SELinux blocks direct execve() on files inside /data/user/0/ or /data/data/ (error=13 Permission denied).
-                // 1. For scripts / mock binaries, invoke via /system/bin/sh
-                // 2. For ELF binaries, invoke via /system/bin/linker64 or /system/bin/linker
                 val isElf = isElfBinary(exeFile)
-                return if (!isElf) {
-                    listOf("/system/bin/sh", config.executable) + config.arguments
+                if (!isElf) {
+                    return listOf("/system/bin/sh", config.executable) + config.arguments
+                }
+                // Musl binaries (like ld-musl-aarch64.so.1) and busybox must be executed directly
+                // and cannot be loaded by the Android Bionic dynamic linker (/system/bin/linker64).
+                if (exeFile.name.contains("musl") || exeFile.name.contains("busybox")) {
+                    return config.fullCommand
+                }
+                val linker = when {
+                    File("/system/bin/linker64").exists() -> "/system/bin/linker64"
+                    File("/system/bin/linker").exists() -> "/system/bin/linker"
+                    else -> null
+                }
+                return if (linker != null) {
+                    listOf(linker, config.executable) + config.arguments
                 } else {
-                    val linker = when {
-                        File("/system/bin/linker64").exists() -> "/system/bin/linker64"
-                        File("/system/bin/linker").exists() -> "/system/bin/linker"
-                        else -> null
-                    }
-                    if (linker != null) {
-                        listOf(linker, config.executable) + config.arguments
-                    } else {
-                        config.fullCommand
-                    }
+                    config.fullCommand
                 }
             }
 
