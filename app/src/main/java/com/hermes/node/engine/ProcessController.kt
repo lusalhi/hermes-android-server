@@ -164,6 +164,27 @@ data class ProcessConfig(
                 }
             }
 
+            val trimmedApiKey = effectiveConfig.provider.apiKey.trim().replace("\r", "").replace("\n", "")
+            val trimmedBaseUrl = effectiveConfig.provider.baseUrl.trim().replace("\r", "").replace("\n", "")
+            val trimmedModel = effectiveConfig.provider.model.trim().replace("\r", "").replace("\n", "")
+            val trimmedProvider = effectiveConfig.provider.provider.trim().replace("\r", "").replace("\n", "")
+
+            if (trimmedApiKey.isNotBlank()) {
+                env["OPENAI_API_KEY"] = trimmedApiKey
+                env["HERMES_API_KEY"] = trimmedApiKey
+            }
+            if (trimmedBaseUrl.isNotBlank()) {
+                env["OPENAI_BASE_URL"] = trimmedBaseUrl
+                env["HERMES_BASE_URL"] = trimmedBaseUrl
+            }
+            if (trimmedModel.isNotBlank()) {
+                env["OPENAI_MODEL"] = trimmedModel
+                env["HERMES_MODEL"] = trimmedModel
+            }
+            if (trimmedProvider.isNotBlank()) {
+                env["HERMES_PROVIDER"] = trimmedProvider
+            }
+
             env.putAll(customEnv)
 
             syncHermesConfig(filesDir, effectiveConfig)
@@ -276,7 +297,16 @@ data class ProcessConfig(
                 val safeTelegramAdminIds = trimmedTelegramAdminIds.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
                 val isTelegramActive = config.gateway.telegram.enabled && safeTelegramToken.isNotBlank()
 
-                // 1. Sync .env (preserve all non-search, non-telegram variables)
+                val trimmedApiKey = config.provider.apiKey.trim()
+                val safeApiKey = trimmedApiKey.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+                val trimmedBaseUrl = config.provider.baseUrl.trim()
+                val safeBaseUrl = trimmedBaseUrl.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+                val trimmedModel = config.provider.model.trim()
+                val safeModel = trimmedModel.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+                val trimmedProvider = config.provider.provider.trim()
+                val safeProviderName = trimmedProvider.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "")
+
+                // 1. Sync .env (preserve all non-search, non-telegram, non-provider variables)
                 val envFile = File(hermesDir, ".env")
                 val existingEnvLines = if (envFile.exists()) {
                     try {
@@ -291,7 +321,14 @@ data class ProcessConfig(
                             !trimmed.startsWith("TELEGRAM_TOKEN=") &&
                             !trimmed.startsWith("TELEGRAM_BOT_TOKEN=") &&
                             !trimmed.startsWith("TELEGRAM_ALLOWED_USERS=") &&
-                            !trimmed.startsWith("TELEGRAM_ADMIN_IDS=")
+                            !trimmed.startsWith("TELEGRAM_ADMIN_IDS=") &&
+                            !trimmed.startsWith("OPENAI_API_KEY=") &&
+                            !trimmed.startsWith("HERMES_API_KEY=") &&
+                            !trimmed.startsWith("OPENAI_BASE_URL=") &&
+                            !trimmed.startsWith("HERMES_BASE_URL=") &&
+                            !trimmed.startsWith("OPENAI_MODEL=") &&
+                            !trimmed.startsWith("HERMES_MODEL=") &&
+                            !trimmed.startsWith("HERMES_PROVIDER=")
                         }
                     } catch (_: Throwable) {
                         emptyList()
@@ -319,6 +356,21 @@ data class ProcessConfig(
                         updatedEnvLines.add("TELEGRAM_ALLOWED_USERS=$safeTelegramAdminIds")
                         updatedEnvLines.add("TELEGRAM_ADMIN_IDS=$safeTelegramAdminIds")
                     }
+                }
+                if (safeApiKey.isNotBlank()) {
+                    updatedEnvLines.add("OPENAI_API_KEY=$safeApiKey")
+                    updatedEnvLines.add("HERMES_API_KEY=$safeApiKey")
+                }
+                if (safeBaseUrl.isNotBlank()) {
+                    updatedEnvLines.add("OPENAI_BASE_URL=$safeBaseUrl")
+                    updatedEnvLines.add("HERMES_BASE_URL=$safeBaseUrl")
+                }
+                if (safeModel.isNotBlank()) {
+                    updatedEnvLines.add("OPENAI_MODEL=$safeModel")
+                    updatedEnvLines.add("HERMES_MODEL=$safeModel")
+                }
+                if (safeProviderName.isNotBlank()) {
+                    updatedEnvLines.add("HERMES_PROVIDER=$safeProviderName")
                 }
 
                 val envTmp = File.createTempFile(".env_", ".tmp", hermesDir)
@@ -494,6 +546,22 @@ data class ProcessConfig(
                         yamlFile.copyTo(rootYaml, overwrite = true)
                         ConfigSerializer.applyPosix0600Permissions(rootEnv)
                         ConfigSerializer.applyPosix0600Permissions(rootYaml)
+
+                        val mainHermesJson = File(filesDir, DAEMON_CONFIG_FILENAME)
+                        if (mainHermesJson.exists()) {
+                            val rootJson = File(rootDir, DAEMON_CONFIG_FILENAME)
+                            mainHermesJson.copyTo(rootJson, overwrite = true)
+                            ConfigSerializer.applyPosix0600Permissions(rootJson)
+                        }
+                    }
+                } catch (_: Throwable) {}
+
+                try {
+                    val mainHermesJson = File(filesDir, DAEMON_CONFIG_FILENAME)
+                    if (mainHermesJson.exists()) {
+                        val dotHermesJson = File(hermesDir, DAEMON_CONFIG_FILENAME)
+                        mainHermesJson.copyTo(dotHermesJson, overwrite = true)
+                        ConfigSerializer.applyPosix0600Permissions(dotHermesJson)
                     }
                 } catch (_: Throwable) {}
             } catch (e: Throwable) {

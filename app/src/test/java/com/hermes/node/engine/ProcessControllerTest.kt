@@ -873,6 +873,49 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun createHermesDaemonConfig_injectsProviderEnvVars_andSyncsHermesFiles() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_provider_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+
+        val hermesConfig = HermesConfig(
+            provider = com.hermes.node.data.model.ProviderConfig(
+                provider = "custom",
+                apiKey = "sk-custom-secret-key",
+                model = "my-custom-model",
+                baseUrl = "https://custom.endpoint.com/v1"
+            )
+        )
+
+        val config = ProcessConfig.createHermesDaemonConfig(
+            filesDir = tempDir,
+            hermesConfig = hermesConfig
+        )
+
+        assertEquals("sk-custom-secret-key", config.environment["OPENAI_API_KEY"])
+        assertEquals("sk-custom-secret-key", config.environment["HERMES_API_KEY"])
+        assertEquals("https://custom.endpoint.com/v1", config.environment["OPENAI_BASE_URL"])
+        assertEquals("https://custom.endpoint.com/v1", config.environment["HERMES_BASE_URL"])
+        assertEquals("my-custom-model", config.environment["OPENAI_MODEL"])
+        assertEquals("my-custom-model", config.environment["HERMES_MODEL"])
+        assertEquals("custom", config.environment["HERMES_PROVIDER"])
+
+        // Check .hermes/.env
+        val hermesDir = File(tempDir, ".hermes")
+        assertTrue(hermesDir.exists())
+
+        val envFile = File(hermesDir, ".env")
+        assertTrue(envFile.exists())
+        val envContent = envFile.readText(Charsets.UTF_8)
+        assertTrue(envContent.contains("OPENAI_API_KEY=sk-custom-secret-key"))
+        assertTrue(envContent.contains("HERMES_API_KEY=sk-custom-secret-key"))
+        assertTrue(envContent.contains("OPENAI_BASE_URL=https://custom.endpoint.com/v1"))
+        assertTrue(envContent.contains("OPENAI_MODEL=my-custom-model"))
+        assertTrue(envContent.contains("HERMES_PROVIDER=custom"))
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
     fun extractPid_extractsPidProperly() {
         val controller = ProcessController(ioDispatcher = testDispatcher)
         val fakeProcess = FakeProcess(fakePid = 6789L)
