@@ -50,7 +50,7 @@ open class BootstrapExtractor(
         const val BOOTSTRAP_ASSET_NAME = "bootstrap-arm64.tar.xz"
         const val MARKER_FILE_NAME = ".bootstrap_complete"
         const val USR_DIR_NAME = "usr"
-        const val BOOTSTRAP_VERSION = 6
+        const val BOOTSTRAP_VERSION = 7
         private const val MIN_REQUIRED_DISK_BYTES = 20L * 1024 * 1024 // 20 MB
 
         val CRITICAL_BINARIES = listOf(
