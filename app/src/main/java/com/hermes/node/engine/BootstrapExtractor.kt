@@ -174,12 +174,10 @@ if [ -n "${'$'}PYTHON_BIN" ] && [ -f "${'$'}PYTHON_BIN" ]; then
             exec "${'$'}SH_BIN" "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
             ;;
         *)
-            if [ -x "/system/bin/linker64" ]; then
-                exec /system/bin/linker64 "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
-            elif [ -x "/system/bin/linker" ]; then
-                exec /system/bin/linker "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
-            else
+            if [ -f "/lib/ld-musl-aarch64.so.1" ] || [ ! -x "/system/bin/linker64" ]; then
                 exec "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
+            else
+                exec /system/bin/linker64 "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
             fi
             ;;
     esac

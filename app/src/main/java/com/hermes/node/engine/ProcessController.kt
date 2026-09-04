@@ -105,10 +105,14 @@ data class ProcessConfig(
             val env = mutableMapOf(
                 "HOME" to filesDir.absolutePath,
                 "PREFIX" to usrDir.absolutePath,
-                "PATH" to "${usrDir.absolutePath}/bin:/system/bin:/system/xbin",
+                "PATH" to "${usrDir.absolutePath}/bin:${usrDir.absolutePath}/sbin:${usrDir.absolutePath}/usr/bin:${usrDir.absolutePath}/usr/sbin:/system/bin:/system/xbin",
                 "TMPDIR" to tmpDir.absolutePath,
                 "PYTHONHOME" to usrDir.absolutePath,
-                "PYTHONPATH" to "${usrDir.absolutePath}/lib/python3.11/site-packages",
+                "PYTHONPATH" to "${usrDir.absolutePath}/lib/python3.12/site-packages:${usrDir.absolutePath}/lib/python3.11/site-packages:${usrDir.absolutePath}/usr/lib/python3.12/site-packages:${usrDir.absolutePath}/usr/lib/python3.11/site-packages",
+                "LD_LIBRARY_PATH" to "${usrDir.absolutePath}/lib:${usrDir.absolutePath}/usr/lib",
+                "PROOT_LOADER" to "${usrDir.absolutePath}/libexec/proot/loader",
+                "PROOT_TMP_DIR" to tmpDir.absolutePath,
+                "PROOT_NO_SECCOMP" to "1",
                 "HERMES_CONFIG_PATH" to configFile
             )
 

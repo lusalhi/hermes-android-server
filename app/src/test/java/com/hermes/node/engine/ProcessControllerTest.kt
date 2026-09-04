@@ -787,6 +787,25 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun createHermesDaemonConfig_injectsProotAndBionicEnvironmentVariables() {
+        val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "proot_env_test_${System.currentTimeMillis()}")
+        tempDir.mkdirs()
+        
+        val config = ProcessConfig.createHermesDaemonConfig(filesDir = tempDir)
+
+        val usrDir = File(tempDir, BootstrapExtractor.USR_DIR_NAME)
+        assertEquals("${usrDir.absolutePath}/lib:${usrDir.absolutePath}/usr/lib", config.environment["LD_LIBRARY_PATH"])
+        assertEquals("${usrDir.absolutePath}/libexec/proot/loader", config.environment["PROOT_LOADER"])
+        assertEquals(File(tempDir, "tmp").absolutePath, config.environment["PROOT_TMP_DIR"])
+        assertEquals("1", config.environment["PROOT_NO_SECCOMP"])
+        val pythonPath = config.environment["PYTHONPATH"] ?: ""
+        assertTrue(pythonPath.contains("python3.12/site-packages"))
+        assertTrue(pythonPath.contains("python3.11/site-packages"))
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
     fun syncHermesConfig_preservesExistingSettings_whileUpdatingTelegramBlock() {
         val tempDir = File(System.getProperty("java.io.tmpdir") ?: "/tmp", "hermes_tg_preserve_${System.currentTimeMillis()}")
         tempDir.mkdirs()
