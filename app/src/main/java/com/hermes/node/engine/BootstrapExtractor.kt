@@ -50,7 +50,7 @@ open class BootstrapExtractor(
         const val BOOTSTRAP_ASSET_NAME = "bootstrap-arm64.tar.xz"
         const val MARKER_FILE_NAME = ".bootstrap_complete"
         const val USR_DIR_NAME = "usr"
-        const val BOOTSTRAP_VERSION = 2
+        const val BOOTSTRAP_VERSION = 3
         private const val MIN_REQUIRED_DISK_BYTES = 20L * 1024 * 1024 // 20 MB
 
         val CRITICAL_BINARIES = listOf(
@@ -336,6 +336,26 @@ exec python3 -m hermes "${'$'}@"
                         issues.add("Critical binary is not executable: $binRelPath")
                     }
                 }
+            }
+
+            // Check for legacy mock userland scripts (which sleep and block execution)
+            val pythonBin = File(usrDir, "bin/python3")
+            if (pythonBin.exists() && pythonBin.length() < 1000L) {
+                try {
+                    val content = pythonBin.readText()
+                    if (content.contains("Hermes ARM64 Userland") || (content.contains("while true; do") && content.contains("sleep"))) {
+                        issues.add("Legacy mock userland script detected in usr/bin/python3 (requires upgrade to production Python runtime)")
+                    }
+                } catch (_: Throwable) {}
+            }
+            val prootBin = File(usrDir, "bin/proot")
+            if (prootBin.exists() && prootBin.length() < 1000L) {
+                try {
+                    val content = prootBin.readText()
+                    if (content.contains("PRoot v5.3.0") || (content.contains("while true; do") && content.contains("sleep"))) {
+                        issues.add("Legacy mock userland script detected in usr/bin/proot (requires upgrade to production PRoot binary)")
+                    }
+                } catch (_: Throwable) {}
             }
 
             // 4. Validate toolchain shims

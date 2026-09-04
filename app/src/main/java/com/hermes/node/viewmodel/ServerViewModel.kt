@@ -201,6 +201,9 @@ class ServerViewModel(
         val health = performHealthCheck()
         if (health is HealthCheckResult.NotInstalled) {
             triggerBootstrap()
+        } else if (health is HealthCheckResult.Corrupted && health.issues.any { it.contains("version mismatch", ignoreCase = true) }) {
+            onAddLog("ARM64 Linux userland requires upgrade (${health.details}). Starting auto-repair...", LogLevel.INFO)
+            onRepairRuntime()
         }
     }
 
