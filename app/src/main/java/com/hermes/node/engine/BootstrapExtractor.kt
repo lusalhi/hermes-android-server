@@ -140,7 +140,51 @@ fi
         )
 
         val HERMES_LAUNCHER_SCRIPT = """#!/bin/sh
-# /usr/bin/hermes
+# /usr/bin/hermes launcher with Android W^X permission workaround
+
+DIR="${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)"
+USR_DIR="${'$'}(cd "${'$'}DIR/.." && pwd)"
+
+PYTHON_BIN=""
+if [ -f "${'$'}DIR/python3" ]; then
+    PYTHON_BIN="${'$'}DIR/python3"
+elif [ -f "${'$'}USR_DIR/bin/python3" ]; then
+    PYTHON_BIN="${'$'}USR_DIR/bin/python3"
+elif [ -n "${'$'}PREFIX" ] && [ -f "${'$'}PREFIX/bin/python3" ]; then
+    PYTHON_BIN="${'$'}PREFIX/bin/python3"
+elif [ -f "/usr/bin/python3" ]; then
+    PYTHON_BIN="/usr/bin/python3"
+elif [ -f "/bin/python3" ]; then
+    PYTHON_BIN="/bin/python3"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="${'$'}(command -v python3)"
+fi
+
+SH_BIN="/system/bin/sh"
+if [ ! -x "${'$'}SH_BIN" ]; then
+    SH_BIN="/bin/sh"
+fi
+
+if [ -n "${'$'}PYTHON_BIN" ] && [ -f "${'$'}PYTHON_BIN" ]; then
+    chmod +x "${'$'}PYTHON_BIN" 2>/dev/null || true
+    first_line=""
+    read -r first_line < "${'$'}PYTHON_BIN" 2>/dev/null || true
+    case "${'$'}first_line" in
+        \#\!*)
+            exec "${'$'}SH_BIN" "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
+            ;;
+        *)
+            if [ -x "/system/bin/linker64" ]; then
+                exec /system/bin/linker64 "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
+            elif [ -x "/system/bin/linker" ]; then
+                exec /system/bin/linker "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
+            else
+                exec "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
+            fi
+            ;;
+    esac
+fi
+
 exec python3 -m hermes "${'$'}@"
 """
     }

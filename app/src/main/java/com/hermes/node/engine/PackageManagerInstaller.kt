@@ -231,6 +231,13 @@ open class PackageManagerInstaller(
             // Enforce POSIX executable permissions (0755) on bin/apk and usr/bin/apk
             enforceApkPermissions()
 
+            try {
+                val extractor = BootstrapExtractor(filesDir)
+                extractor.ensureToolchainShims()
+                extractor.ensureHermesLauncher()
+                extractor.enforcePermissions(usrDir)
+            } catch (_: Throwable) {}
+
             if (!isPackageManagerInstalled()) {
                 return@withContext Result.failure(
                     IOException("Package manager installation validation failed: apk binary missing or not executable in $usrDir")

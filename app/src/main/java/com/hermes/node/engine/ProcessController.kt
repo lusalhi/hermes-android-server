@@ -82,6 +82,14 @@ data class ProcessConfig(
                     if (File(usrDir, "bin/hermes").exists() || File(usrDir, "usr/bin/hermes").exists()) {
                         extractor.ensureHermesLauncher()
                     }
+                    listOf("python3", "proot", "hermes", "apk", "bash", "sh").forEach { name ->
+                        listOf(File(usrDir, "bin/$name"), File(usrDir, "usr/bin/$name")).forEach { file ->
+                            if (file.exists()) {
+                                file.setReadable(true, false)
+                                file.setExecutable(true, false)
+                            }
+                        }
+                    }
                 } catch (_: Throwable) {}
             }
 
