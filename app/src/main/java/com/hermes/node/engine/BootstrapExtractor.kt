@@ -50,7 +50,7 @@ open class BootstrapExtractor(
         const val BOOTSTRAP_ASSET_NAME = "bootstrap-arm64.tar.xz"
         const val MARKER_FILE_NAME = ".bootstrap_complete"
         const val USR_DIR_NAME = "usr"
-        const val BOOTSTRAP_VERSION = 7
+        const val BOOTSTRAP_VERSION = 8
         private const val MIN_REQUIRED_DISK_BYTES = 20L * 1024 * 1024 // 20 MB
 
         val CRITICAL_BINARIES = listOf(
@@ -145,6 +145,14 @@ fi
 DIR="${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)"
 USR_DIR="${'$'}(cd "${'$'}DIR/.." && pwd)"
 
+HERMES_AGENT_DIR="/usr/lib/hermes-agent"
+if [ ! -d "${'$'}HERMES_AGENT_DIR" ]; then
+    HERMES_AGENT_DIR="${'$'}USR_DIR/lib/hermes-agent"
+fi
+if [ ! -d "${'$'}HERMES_AGENT_DIR" ]; then
+    HERMES_AGENT_DIR="${'$'}USR_DIR/usr/lib/hermes-agent"
+fi
+
 if [ -d "/usr/lib/python3.12" ]; then
     export PYTHONHOME="/usr"
 elif [ -d "${'$'}USR_DIR/usr/lib/python3.12" ]; then
@@ -153,7 +161,7 @@ elif [ -d "${'$'}USR_DIR/lib/python3.12" ]; then
     export PYTHONHOME="${'$'}USR_DIR"
 fi
 
-export PYTHONPATH="/usr/lib/python3.12/site-packages:/usr/lib/python3.12/lib-dynload:${'$'}USR_DIR/usr/lib/python3.12/site-packages:${'$'}USR_DIR/usr/lib/python3.12/lib-dynload:${'$'}USR_DIR/lib/python3.12/site-packages:${'$'}PYTHONPATH"
+export PYTHONPATH="${'$'}HERMES_AGENT_DIR:/usr/lib/python3.12/site-packages:/usr/lib/python3.12/lib-dynload:${'$'}USR_DIR/usr/lib/hermes-agent:${'$'}USR_DIR/usr/lib/python3.12/site-packages:${'$'}USR_DIR/usr/lib/python3.12/lib-dynload:${'$'}USR_DIR/lib/hermes-agent:${'$'}USR_DIR/lib/python3.12/site-packages:${'$'}PYTHONPATH"
 export LD_LIBRARY_PATH="/lib:/usr/lib:${'$'}USR_DIR/lib:${'$'}USR_DIR/usr/lib:${'$'}LD_LIBRARY_PATH"
 export PATH="/bin:/usr/bin:/sbin:/usr/sbin:${'$'}USR_DIR/bin:${'$'}USR_DIR/usr/bin:${'$'}PATH"
 export PYTHONUNBUFFERED="1"
@@ -173,7 +181,9 @@ elif command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="${'$'}(command -v python3)"
 fi
 
-if [ -f "/lib/ld-musl-aarch64.so.1" ]; then
+if [ -f "${'$'}HERMES_AGENT_DIR/hermes" ]; then
+    exec "${'$'}PYTHON_BIN" "${'$'}HERMES_AGENT_DIR/hermes" "${'$'}@"
+elif [ -f "/lib/ld-musl-aarch64.so.1" ]; then
     exec "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
 elif [ -f "${'$'}USR_DIR/lib/ld-musl-aarch64.so.1" ]; then
     exec "${'$'}USR_DIR/lib/ld-musl-aarch64.so.1" --library-path "${'$'}USR_DIR/lib:${'$'}USR_DIR/usr/lib" "${'$'}PYTHON_BIN" -m hermes "${'$'}@"
@@ -286,8 +296,8 @@ fi
             val libDir = File(targetDir, "lib").apply { if (!exists()) mkdirs() }
             val usrLibDir = File(targetDir, "usr/lib")
             
-            // Link python3.12 and python3.11
-            listOf("python3.12", "python3.11").forEach { pyName ->
+            // Link python3.12, python3.11, and hermes-agent
+            listOf("python3.12", "python3.11", "hermes-agent").forEach { pyName ->
                 val link = File(libDir, pyName)
                 val target = File(usrLibDir, pyName)
                 if (target.exists() && !link.exists()) {

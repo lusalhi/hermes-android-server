@@ -122,7 +122,7 @@ data class ProcessConfig(
                 "PATH" to "/bin:/usr/bin:/sbin:/usr/sbin:${usrDir.absolutePath}/bin:${usrDir.absolutePath}/usr/bin:/system/bin:/system/xbin",
                 "TMPDIR" to tmpDir.absolutePath,
                 "PYTHONHOME" to "/usr",
-                "PYTHONPATH" to "/usr/lib/python3.12/site-packages:/usr/lib/python3.11/site-packages:/usr/lib/python3.12/lib-dynload:${usrDir.absolutePath}/usr/lib/python3.12/site-packages:${usrDir.absolutePath}/usr/lib/python3.11/site-packages:${usrDir.absolutePath}/usr/lib/python3.12/lib-dynload:${usrDir.absolutePath}/lib/python3.12/site-packages",
+                "PYTHONPATH" to "/usr/lib/hermes-agent:/usr/lib/python3.12/site-packages:/usr/lib/python3.11/site-packages:/usr/lib/python3.12/lib-dynload:${usrDir.absolutePath}/usr/lib/hermes-agent:${usrDir.absolutePath}/usr/lib/python3.12/site-packages:${usrDir.absolutePath}/usr/lib/python3.11/site-packages:${usrDir.absolutePath}/lib/hermes-agent:${usrDir.absolutePath}/lib/python3.12/site-packages",
                 "LD_LIBRARY_PATH" to "${usrDir.absolutePath}/lib:${usrDir.absolutePath}/usr/lib",
                 "PROOT_LOADER" to "${usrDir.absolutePath}/libexec/proot/loader",
                 "PROOT_TMP_DIR" to tmpDir.absolutePath,
@@ -161,6 +161,11 @@ data class ProcessConfig(
                 if (trimmedAdminIds.isNotBlank()) {
                     env["TELEGRAM_ALLOWED_USERS"] = trimmedAdminIds
                     env["TELEGRAM_ADMIN_IDS"] = trimmedAdminIds
+                    env["GATEWAY_ALLOW_ALL_USERS"] = "false"
+                    env["TELEGRAM_ALLOW_ALL_USERS"] = "false"
+                } else {
+                    env["GATEWAY_ALLOW_ALL_USERS"] = "true"
+                    env["TELEGRAM_ALLOW_ALL_USERS"] = "true"
                 }
             }
 
@@ -322,6 +327,8 @@ data class ProcessConfig(
                             !trimmed.startsWith("TELEGRAM_BOT_TOKEN=") &&
                             !trimmed.startsWith("TELEGRAM_ALLOWED_USERS=") &&
                             !trimmed.startsWith("TELEGRAM_ADMIN_IDS=") &&
+                            !trimmed.startsWith("GATEWAY_ALLOW_ALL_USERS=") &&
+                            !trimmed.startsWith("TELEGRAM_ALLOW_ALL_USERS=") &&
                             !trimmed.startsWith("OPENAI_API_KEY=") &&
                             !trimmed.startsWith("HERMES_API_KEY=") &&
                             !trimmed.startsWith("OPENAI_BASE_URL=") &&
@@ -355,6 +362,11 @@ data class ProcessConfig(
                     if (safeTelegramAdminIds.isNotBlank()) {
                         updatedEnvLines.add("TELEGRAM_ALLOWED_USERS=$safeTelegramAdminIds")
                         updatedEnvLines.add("TELEGRAM_ADMIN_IDS=$safeTelegramAdminIds")
+                        updatedEnvLines.add("GATEWAY_ALLOW_ALL_USERS=false")
+                        updatedEnvLines.add("TELEGRAM_ALLOW_ALL_USERS=false")
+                    } else {
+                        updatedEnvLines.add("GATEWAY_ALLOW_ALL_USERS=true")
+                        updatedEnvLines.add("TELEGRAM_ALLOW_ALL_USERS=true")
                     }
                 }
                 if (safeApiKey.isNotBlank()) {
@@ -391,6 +403,9 @@ data class ProcessConfig(
                 // 2. Sync config.yaml (preserve all non-search, non-telegram lines and sections)
                 val yamlFile = File(hermesDir, "config.yaml")
                 val searchKeys = setOf("search_provider:", "search_api_key:", "web_search:")
+                val isModelConfigured = safeModel.isNotBlank() || safeBaseUrl.isNotBlank() ||
+                    (safeApiKey.isNotBlank() && safeProviderName.isNotBlank() && !safeProviderName.equals("nous_portal", ignoreCase = true))
+
                 val existingYamlLines = if (yamlFile.exists()) {
                     try {
                         val lines = yamlFile.readLines(Charsets.UTF_8)
@@ -398,8 +413,22 @@ data class ProcessConfig(
                         var skippingWebBlock = false
                         var skippingTelegramBlock = false
                         var skippingGatewaysBlock = false
+                        var skippingModelBlock = false
                         for (line in lines) {
                             val trimmed = line.trim()
+                            if (isModelConfigured) {
+                                if (trimmed == "model:" || trimmed.startsWith("model:") || trimmed == "model :" || trimmed.startsWith("model :")) {
+                                    skippingModelBlock = true
+                                    continue
+                                }
+                                if (skippingModelBlock) {
+                                    if (line.isBlank() || line.startsWith(" ") || line.startsWith("\t")) {
+                                        continue
+                                    } else {
+                                        skippingModelBlock = false
+                                    }
+                                }
+                            }
                             if (trimmed == "web:" || trimmed.startsWith("web:") || trimmed == "web :" || trimmed.startsWith("web :")) {
                                 skippingWebBlock = true
                                 continue
@@ -458,6 +487,27 @@ data class ProcessConfig(
                     if (existingYamlLines.isNotEmpty()) {
                         append(existingYamlLines.joinToString("\n"))
                         append("\n")
+                    }
+                    if (isModelConfigured) {
+                        val effectiveModelProvider = when {
+                            safeProviderName.equals("custom", ignoreCase = true) || safeProviderName.equals("ollama", ignoreCase = true) -> "custom"
+                            safeProviderName.equals("nous_portal", ignoreCase = true) || safeProviderName.equals("nous", ignoreCase = true) -> "nous"
+                            safeProviderName.isNotBlank() -> safeProviderName.lowercase()
+                            safeBaseUrl.isNotBlank() -> "custom"
+                            else -> "auto"
+                        }
+                        appendLine("model:")
+                        if (safeModel.isNotBlank()) {
+                            appendLine("  default: \"$safeModel\"")
+                            appendLine("  model: \"$safeModel\"")
+                        }
+                        appendLine("  provider: \"$effectiveModelProvider\"")
+                        if (safeBaseUrl.isNotBlank()) {
+                            appendLine("  base_url: \"$safeBaseUrl\"")
+                        }
+                        if (safeApiKey.isNotBlank()) {
+                            appendLine("  api_key: \"$safeApiKey\"")
+                        }
                     }
                     if (isSearchActive) {
                         appendLine("search_provider: \"$safeProvider\"")
