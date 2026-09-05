@@ -195,18 +195,23 @@ open class LogStreamer(
                 upper.contains("FATAL") ||
                 upper.contains("EXCEPTION") ||
                 upper.contains("TRACEBACK") ||
-                upper.contains("ERROR: ") -> LogLevel.ERROR
+                upper.contains("ERROR: ") ||
+                upper.contains(" ERROR ") -> LogLevel.ERROR
 
                 upper.contains("[WARN]") ||
                 upper.contains("[WARNING]") ||
                 upper.contains("WARNING:") ||
-                upper.contains("WARN:") -> LogLevel.WARN
+                upper.contains("WARN:") ||
+                upper.contains(" WARNING ") ||
+                upper.contains(" WARN ") -> LogLevel.WARN
 
                 upper.contains("[DEBUG]") ||
-                upper.contains("DEBUG:") -> LogLevel.DEBUG
+                upper.contains("DEBUG:") ||
+                upper.contains(" DEBUG ") -> LogLevel.DEBUG
 
                 upper.contains("[INFO]") ||
-                upper.contains("INFO:") -> LogLevel.INFO
+                upper.contains("INFO:") ||
+                upper.contains(" INFO ") -> LogLevel.INFO
 
                 isStderr -> LogLevel.ERROR
 

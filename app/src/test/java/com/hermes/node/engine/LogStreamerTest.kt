@@ -85,6 +85,14 @@ class LogStreamerTest {
             LogLevel.WARN,
             LogStreamer.parseLogLevel("[WARN] High memory usage on stderr", isStderr = true)
         )
+        assertEquals(
+            LogLevel.WARN,
+            LogStreamer.parseLogLevel("2026-09-05 05:11:18,857 WARNING hermes_plugins: Connected", isStderr = true)
+        )
+        assertEquals(
+            LogLevel.INFO,
+            LogStreamer.parseLogLevel("2026-09-05 05:11:18,857 INFO hermes_plugins: Ready", isStderr = true)
+        )
 
         // ERROR
         assertEquals(
